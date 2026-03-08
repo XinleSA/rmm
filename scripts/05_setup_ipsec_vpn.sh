@@ -2,7 +2,7 @@
 # =============================================================================
 #  Xinle 欣乐 — IPsec Site-to-Site VPN Setup Script
 # =============================================================================
-#  Version: 6.0
+#  Version: 6.1 — FIX: Use correct service name 'ipsec' (not 'strongswan') on Ubuntu 24.04
 #
 #  This script installs and configures strongSwan to create a secure, policy-based
 #  IPsec site-to-site VPN tunnel, designed to connect to a UniFi Dream Machine Pro.
@@ -24,7 +24,7 @@ print_info()   { echo -e "\e[1;36m  $1\e[0m"; }
 # --- 1. Install strongSwan ---
 print_header "Installing strongSwan IPsec VPN"
 apt-get update -qq
-apt-get install -y strongswan
+apt-get install -y strongswan strongswan-starter
 
 # --- 2. Generate Pre-Shared Key (PSK) ---
 print_header "Generating Pre-Shared Key"
@@ -78,7 +78,7 @@ print_header "Creating Virtual Tunnel Interface (xfrm0)"
 cat > /etc/systemd/system/xfrm0-interface.service << EOF
 [Unit]
 Description=Persistent xfrm0 Tunnel Interface
-After=network.target strongswan.service
+After=network.target ipsec.service
 
 [Service]
 Type=oneshot
@@ -97,8 +97,8 @@ print_info "xfrm0 interface created at ${TUNNEL_IP} and will persist on reboot."
 
 # --- 6. Start & Enable Service ---
 print_header "Starting and Enabling strongSwan Service"
-systemctl restart strongswan
-systemctl enable strongswan
+systemctl restart ipsec
+systemctl enable ipsec
 print_info "strongSwan service started and enabled."
 
 # --- 7. Display UDM Pro Configuration ---

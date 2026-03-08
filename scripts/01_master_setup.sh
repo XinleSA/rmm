@@ -2,7 +2,7 @@
 # =============================================================================
 #  Xinle 欣乐 — Master Infrastructure Setup Script & Bootstrapper
 # =============================================================================
-#  Version: 9.7 — FINAL BUGFIX
+#  Version: 9.8
 #
 #  This script is the single entry point for deploying the entire Xinle
 #  self-hosted infrastructure stack on a fresh Ubuntu 24.04.4 LTS server.
@@ -10,6 +10,8 @@
 #  FIX in 9.7: Solves the infinite loop by passing a `--bootstrapped` flag
 #  after the first exec, preventing the pre-flight cleanup from running again.
 #  Also fixes the Docker detection logic to be more precise.
+#  FIX in 9.8: Fixes IPsec rollback to use correct 'ipsec' service name on
+#  Ubuntu 24.04 and also removes the xfrm0 systemd unit file on rollback.
 # =============================================================================
 
 set -e
@@ -85,8 +87,12 @@ rollback() {
     fi
     if [ "$STATE_IPSEC_INSTALLED" = true ]; then
         print_info "Uninstalling IPsec (strongSwan)..."
-        sudo apt-get purge -y strongswan strongswan-pki || true
+        sudo systemctl stop ipsec || true
+        sudo systemctl disable xfrm0-interface.service || true
+        sudo apt-get purge -y strongswan strongswan-starter strongswan-pki || true
         sudo rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/ipsec.d || true
+        sudo rm -f /etc/systemd/system/xfrm0-interface.service || true
+        sudo systemctl daemon-reload || true
     fi
     if [ "$STATE_DOCKER_DIR_CREATED" = true ]; then
         print_info "Removing Docker application directory $DOCKER_APPS_DIR..."
