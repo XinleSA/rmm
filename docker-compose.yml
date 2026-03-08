@@ -1,0 +1,172 @@
+version: '3.8'
+
+# =============================================================================
+#  Xinle 欣乐 — Master Docker Compose File
+# =============================================================================
+#  Version: 6.0
+#
+#  This file defines all services, networks, and volumes for the Xinle
+#  self-hosted infrastructure stack.
+#
+#  To start all services:  docker compose up -d
+#  To stop all services:   docker compose down
+#  To update all images:   ./scripts/02_update_images.sh
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  #  1. Nginx Proxy Manager (NPM)
+  #     - Handles all public-facing SSL and routing.
+  #     - Accessible at http://<vps_ip>:81 for initial setup.
+  #     - Final URL: https://rmmx.xinle.biz/npm
+  # ---------------------------------------------------------------------------
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - '80:80'   # Public HTTP
+      - '443:443' # Public HTTPS
+      - '81:81'   # NPM Admin UI
+    volumes:
+      - /docker_apps/npm/data:/data
+      - /docker_apps/npm/letsencrypt:/etc/letsencrypt
+    networks:
+      - xinle_network
+
+  # ---------------------------------------------------------------------------
+  #  2. n8n — Workflow Automation
+  #     - Final URL: https://rmmx.xinle.biz/n8n
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    volumes:
+      - /docker_apps/n8n:/home/node/.n8n
+    networks:
+      - xinle_network
+    environment:
+      - N8N_HOST=rmmx.xinle.biz
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://rmmx.xinle.biz/n8n/
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-sar}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-tb,Xinle2026!}
+
+  # ---------------------------------------------------------------------------
+  #  3. Forgejo — Self-Hosted Git Service
+  #     - Final URL: https://rmmx.xinle.biz/git
+  # ---------------------------------------------------------------------------
+  forgejo:
+    image: code.gitea.io/forgejo:7
+    container_name: forgejo
+    restart: unless-stopped
+    volumes:
+      - /docker_apps/forgejo:/data
+    networks:
+      - xinle_network
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - FORGEJO__database__DB_TYPE=postgres
+      - FORGEJO__database__HOST=postgres:5432
+      - FORGEJO__database__NAME=${POSTGRES_DB:-forgejo}
+      - FORGEJO__database__USER=${POSTGRES_USER:-sar}
+      - FORGEJO__database__PASSWD=${POSTGRES_PASSWORD:-tb,Xinle2026!}
+      - FORGEJO__server__ROOT_URL=https://rmmx.xinle.biz/git
+
+  # ---------------------------------------------------------------------------
+  #  4. NetLock RMM — Remote Monitoring & Management
+  #     - Final URL: https://rmmx.xinle.biz/rmm
+  # ---------------------------------------------------------------------------
+  netlockrmm-server:
+    image: netlock/netlockrmm-server:latest
+    container_name: netlockrmm-server
+    restart: unless-stopped
+    volumes:
+      - /docker_apps/netlockrmm/server-files:/app/wwwroot/server-files
+      - ./scripts/netlock-server-appsettings.json:/app/appsettings.json
+    networks:
+      - xinle_network
+
+  netlockrmm-web:
+    image: netlock/netlockrmm-web:latest
+    container_name: netlockrmm-web
+    restart: unless-stopped
+    volumes:
+      - ./scripts/netlock-web-appsettings.json:/app/appsettings.json
+    networks:
+      - xinle_network
+
+  # ---------------------------------------------------------------------------
+  #  5. Databases & Database Admin Tools
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    volumes:
+      - /docker_apps/postgres:/var/lib/postgresql/data
+    networks:
+      - xinle_network
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-xinle_db}
+      - POSTGRES_USER=${POSTGRES_USER:-sar}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tb,Xinle2026!}
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: unless-stopped
+    volumes:
+      - /docker_apps/pgadmin:/var/lib/pgadmin
+    networks:
+      - xinle_network
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@xinle.biz
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-tb,Xinle2026!}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - /docker_apps/mysql:/var/lib/mysql
+    networks:
+      - xinle_network
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-tb,Xinle2026!}
+      - MYSQL_DATABASE=netlockrmm
+      - MYSQL_USER=sar
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-tb,Xinle2026!}
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: phpmyadmin
+    restart: unless-stopped
+    networks:
+      - xinle_network
+    environment:
+      - PMA_HOST=mysql
+      - PMA_PORT=3306
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-tb,Xinle2026!}
+
+# =============================================================================
+#  Networks & Volumes
+# =============================================================================
+networks:
+  xinle_network:
+    name: xinle_network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          

@@ -1,0 +1,16 @@
+# Credentials — NEVER commit
+.credentials
+*.credentials
+secrets/
+
+# Generated files
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,70 @@
+# =============================================================================
+# Preseed configuration for Ubuntu 24.04.4 LTS (Noble Numbat) automated install
+# =============================================================================
+# This file is used by 04_reinstall_os.sh to perform an unattended OS install.
+# Placeholders {{IP_ADDRESS}}, {{NETMASK}}, {{GATEWAY}} are replaced at runtime.
+# =============================================================================
+
+# --- Locale and Language ---
+d-i debian-installer/language string en
+d-i debian-installer/country string US
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+
+# --- Network Configuration (static IP, replaced at runtime) ---
+d-i netcfg/choose_interface select auto
+d-i netcfg/disable_autoconfig boolean true
+d-i netcfg/get_ipaddress string {{IP_ADDRESS}}
+d-i netcfg/get_netmask string {{NETMASK}}
+d-i netcfg/get_gateway string {{GATEWAY}}
+d-i netcfg/get_nameservers string {{NAMESERVERS}}
+d-i netcfg/confirm_static boolean true
+d-i netcfg/get_hostname string xinle-vps
+d-i netcfg/get_domain string xinle.biz
+
+# --- Mirror ---
+d-i mirror/country string US
+d-i mirror/http/hostname string archive.ubuntu.com
+d-i mirror/http/directory string /ubuntu
+d-i mirror/http/proxy string
+
+# --- Clock and Timezone ---
+d-i clock-setup/utc boolean true
+d-i time/zone string America/Chicago
+d-i clock-setup/ntp boolean true
+d-i clock-setup/ntp-server string 0.us.pool.ntp.org
+
+# --- Partitioning (use entire disk, LVM) ---
+d-i partman-auto/method string lvm
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-auto/choose_recipe select atomic
+d-i partman-auto-lvm/guided_size string max
+d-i partman/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+# --- User Account ---
+d-i passwd/user-fullname string Installer
+d-i passwd/username string installer
+d-i passwd/user-password-crypted password {{INSTALLER_PASSWORD_HASH}}
+d-i user-setup/allow-password-login boolean true
+
+# --- Package Selection ---
+d-i base-installer/kernel/image string linux-generic
+tasksel tasksel/first multiselect standard, ssh-server
+d-i pkgsel/include string openssh-server curl wget git ufw ntp
+d-i pkgsel/upgrade select full-upgrade
+d-i pkgsel/update-policy select unattended-upgrades
+
+# --- Boot Loader ---
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean false
+d-i grub-installer/bootdev string /dev/sda
+
+# --- Finish ---
+d-i finish-install/reboot_in_progress note
+d-i debian-installer/exit/poweroff boolean false
