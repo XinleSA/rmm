@@ -241,6 +241,24 @@ sudo chmod +x "$PROJECT_DEST/scripts/05_setup_ipsec_vpn.sh"
 sudo "$PROJECT_DEST/scripts/05_setup_ipsec_vpn.sh"
 STATE_IPSEC_INSTALLED=true
 
+# --- Seed NetLock RMM Configuration Files ---
+print_header "Seeding NetLock RMM Configuration"
+sudo mkdir -p /docker_apps/netlockrmm/server/internal
+sudo mkdir -p /docker_apps/netlockrmm/server/files
+sudo mkdir -p /docker_apps/netlockrmm/server/logs
+sudo mkdir -p /docker_apps/netlockrmm/web
+# Only seed the appsettings if they don't already exist (preserve user edits)
+if [ ! -f /docker_apps/netlockrmm/server/appsettings.json ]; then
+    sudo cp "$PROJECT_DEST/scripts/netlock-server-appsettings.json" /docker_apps/netlockrmm/server/appsettings.json
+    print_info "Seeded NetLock RMM server appsettings.json"
+fi
+if [ ! -f /docker_apps/netlockrmm/web/appsettings.json ]; then
+    sudo cp "$PROJECT_DEST/scripts/netlock-web-appsettings.json" /docker_apps/netlockrmm/web/appsettings.json
+    print_info "Seeded NetLock RMM web console appsettings.json"
+fi
+sudo chown -R "$TARGET_USER":"$TARGET_USER" /docker_apps/netlockrmm
+print_info "NetLock RMM configuration directories ready."
+
 # --- Start All Docker Services ---
 print_header "Starting All Docker Services"
 cd "$PROJECT_DEST"

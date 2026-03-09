@@ -1,9 +1,7 @@
-version: '3.8'
-
 # =============================================================================
 #  Xinle 欣乐 — Master Docker Compose File
 # =============================================================================
-#  Version: 6.0
+#  Version: 7.0
 #
 #  This file defines all services, networks, and volumes for the Xinle
 #  self-hosted infrastructure stack.
@@ -86,23 +84,38 @@ services:
   #     - Final URL: https://rmmx.xinle.biz/rmm
   # ---------------------------------------------------------------------------
   netlockrmm-server:
-    image: netlock/netlockrmm-server:latest
+    image: nicomak101/netlock-rmm-server:latest
     container_name: netlockrmm-server
     restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
+      - NETLOCK_MYSQL_SERVER=mysql
+      - NETLOCK_MYSQL_PORT=3306
+      - NETLOCK_MYSQL_DATABASE=netlockrmm
+      - NETLOCK_MYSQL_USER=sar
+      - NETLOCK_MYSQL_PASSWORD=${MYSQL_PASSWORD:-tb,Xinle2026!}
     volumes:
-      - /docker_apps/netlockrmm/server-files:/app/wwwroot/server-files
-      - ./scripts/netlock-server-appsettings.json:/app/appsettings.json
+      - /docker_apps/netlockrmm/server/appsettings.json:/app/appsettings.json:ro
+      - /docker_apps/netlockrmm/server/internal:/app/internal
+      - /docker_apps/netlockrmm/server/files:/app/www/private/files
+      - /docker_apps/netlockrmm/server/logs:/var/log/netlockrmm
     networks:
       - xinle_network
+    depends_on:
+      - mysql
 
   netlockrmm-web:
-    image: netlock/netlockrmm-web:latest
+    image: nicomak101/netlock-rmm-web-console:latest
     container_name: netlockrmm-web
     restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
     volumes:
-      - ./scripts/netlock-web-appsettings.json:/app/appsettings.json
+      - /docker_apps/netlockrmm/web/appsettings.json:/app/appsettings.json:ro
     networks:
       - xinle_network
+    depends_on:
+      - netlockrmm-server
 
   # ---------------------------------------------------------------------------
   #  5. Databases & Database Admin Tools

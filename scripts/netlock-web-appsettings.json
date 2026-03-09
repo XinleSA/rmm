@@ -1,10 +1,11 @@
 {
   "Logging": {
     "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning"
+      "Default": "Warning",
+      "Microsoft": "Error",
+      "Microsoft.Hosting.Lifetime": "Warning"
     }
   },
   "AllowedHosts": "*",
-  "ServerUrl": "http://netlockrmm-server:80"
+  "ServerUrl": "http://netlockrmm-server:7080"
 }
