@@ -2,7 +2,7 @@
 # =============================================================================
 #  Xinle 欣乐 — IPsec Site-to-Site VPN Setup Script
 # =============================================================================
-#  Version: 7.1
+#  Version: 7.2
 #
 #  Called by 01_master_setup.sh as part of the main install flow.
 #  All fixes are built in — no manual post-install steps required.
@@ -44,6 +44,15 @@ print_info()   { echo -e "\e[1;36m  $1\e[0m"; }
 
 # --- 1. Install strongSwan ---
 print_header "Installing strongSwan IPsec VPN"
+
+# Pre-seed debconf so iptables-persistent never shows an interactive dialog.
+# The 'Save current IPv4/IPv6 rules?' prompts would block a non-interactive
+# script. We answer 'true' (yes) to both so rules are saved on install.
+apt-get install -y debconf-utils
+echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
+echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
+
+export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y strongswan strongswan-starter iptables-persistent
 
