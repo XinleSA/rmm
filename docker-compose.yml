@@ -1,7 +1,7 @@
 # =============================================================================
 #  Xinle 欣乐 — Master Docker Compose File
 # =============================================================================
-#  Version: 7.0
+#  Version: 7.1
 #
 #  This file defines all services, networks, and volumes for the Xinle
 #  self-hosted infrastructure stack.
@@ -62,7 +62,7 @@ services:
   #     - Final URL: https://rmmx.xinle.biz/git
   # ---------------------------------------------------------------------------
   forgejo:
-    image: code.gitea.io/forgejo:7
+    image: codeberg.org/forgejo/forgejo:14
     container_name: forgejo
     restart: unless-stopped
     volumes:
