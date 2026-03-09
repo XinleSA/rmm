@@ -2,33 +2,41 @@
 # =============================================================================
 #  Xinle 欣乐 — IPsec Site-to-Site VPN Setup Script
 # =============================================================================
-#  Version: 7.0
+#  Version: 7.1
 #
-#  Fixes in 7.0 (vs 6.1):
-#  1. Enable kernel IP forwarding (net.ipv4.ip_forward=1) — without this the
-#     VPS drops all forwarded packets between the tunnel and Docker network.
-#  2. Add static route: ip route add 10.1.0.0/24 dev xfrm0 — without this
-#     the VPS has no route to the UDM Pro LAN.
-#  3. Add iptables FORWARD rules to allow traffic between xfrm0 and the
-#     Docker bridge — Docker's default FORWARD policy is DROP.
-#  4. Bind the xfrm0 interface to the IPsec SA via if_id in ipsec.conf —
-#     without this the XFRM policy and the virtual interface are disconnected.
-#  5. Change auto=start to auto=add — the UDM Pro initiates the tunnel,
-#     so the VPS should listen (add) not initiate (start). Using start with
-#     right=%any is contradictory and causes connection instability.
-#  6. Make the route and iptables rules persistent across reboots via the
-#     xfrm0-interface.service unit.
+#  Called by 01_master_setup.sh as part of the main install flow.
+#  All fixes are built in — no manual post-install steps required.
+#
+#  What this script configures:
+#  1. Installs strongSwan + iptables-persistent
+#  2. Enables kernel IP forwarding (net.ipv4.ip_forward=1), persistent
+#  3. Generates a random 32-char PSK and writes /etc/ipsec.secrets
+#  4. Writes /etc/ipsec.conf with:
+#       - auto=add  (UDM Pro initiates; VPS listens)
+#       - if_id_in/out bound to xfrm0 interface
+#       - IKEv2, AES-256, SHA-256, DH Group 14
+#       - DPD restart on dead peer
+#  5. Creates /etc/ipsec.d/xinle-updown.sh to add/remove the route to
+#     10.1.0.0/24 whenever the tunnel comes up or goes down
+#  6. Opens UFW ports 500/udp and 4500/udp
+#  7. Adds iptables FORWARD rules for xfrm0 and saves them persistently
+#  8. Creates and enables xfrm0-interface.service (systemd) which:
+#       - Creates the xfrm0 virtual interface bound to if_id 42
+#       - Assigns tunnel IP 172.20.10.1/32
+#       - Adds static route to 10.1.0.0/24 via xfrm0
+#  9. Starts and enables the ipsec service
+# 10. Saves the PSK to /etc/ipsec.d/psk.txt for the master script to
+#     include in the final deployment summary
 # =============================================================================
 
 set -e
 
 # --- Configuration ---
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 readonly AI_SITE_SUBNET="10.1.0.0/24"
 readonly DOCKER_SUBNET="172.20.0.0/16"
 readonly TUNNEL_IP="172.20.10.1"
 readonly XFRM_IF_ID="42"
+readonly PSK_FILE="/etc/ipsec.d/psk.txt"
 
 # --- Helper Functions ---
 print_header() { echo -e "\n\e[1;35m--- $1 ---\e[0m"; }
@@ -41,35 +49,25 @@ apt-get install -y strongswan strongswan-starter iptables-persistent
 
 # --- 2. Enable IP Forwarding ---
 print_header "Enabling Kernel IP Forwarding"
-# Set immediately
 sysctl -w net.ipv4.ip_forward=1
-# Persist across reboots
-if ! grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-fi
-print_info "IP forwarding enabled."
+grep -q "^net.ipv4.ip_forward" /etc/sysctl.conf \
+    && sed -i 's/^net.ipv4.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf \
+    || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+print_info "IP forwarding enabled and persisted in /etc/sysctl.conf."
 
-# --- 3. Generate Pre-Shared Key (PSK) ---
+# --- 3. Generate Pre-Shared Key ---
 print_header "Generating Pre-Shared Key"
 PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
-print_info "PSK generated successfully."
+print_info "PSK generated."
 
-# --- 4. Configure IPsec ---
-print_header "Configuring IPsec (ipsec.conf & ipsec.secrets)"
-
-# Write ipsec.secrets
+# --- 4. Write IPsec Secrets ---
 cat > /etc/ipsec.secrets << EOF
 : PSK "${PSK}"
 EOF
 chmod 600 /etc/ipsec.secrets
 
-# Write ipsec.conf
-# Notes:
-#   - leftsubnet is what we advertise to the peer (our Docker network)
-#   - rightsubnet is the remote network we want to reach (UDM Pro LAN)
-#   - if_id links this connection to the xfrm0 virtual interface
-#   - auto=add means we wait for the UDM Pro to initiate (it has a dynamic IP)
-#   - mark/if_id must match the xfrm0 interface if_id
+# --- 5. Write IPsec Configuration ---
+print_header "Writing IPsec Configuration"
 cat > /etc/ipsec.conf << EOF
 config setup
     charondebug="ike 1, knl 1, cfg 1"
@@ -100,16 +98,14 @@ conn xinle-s2s
     if_id_out=${XFRM_IF_ID}
     auto=add
 EOF
+print_info "ipsec.conf written."
 
-print_info "strongSwan configuration files created."
-
-# --- 5. Create updown Script for Route Management ---
-print_header "Creating IPsec updown Script"
+# --- 6. Create Updown Script (manages route on tunnel up/down) ---
+print_header "Creating IPsec Updown Script"
 mkdir -p /etc/ipsec.d
-cat > /etc/ipsec.d/xinle-updown.sh << 'UPDOWN'
+cat > /etc/ipsec.d/xinle-updown.sh << EOF
 #!/bin/bash
-# Called by strongSwan when tunnel comes up or goes down
-case "$PLUTO_VERB" in
+case "\$PLUTO_VERB" in
     up-client)
         ip route replace ${AI_SITE_SUBNET} dev xfrm0 2>/dev/null || true
         ;;
@@ -117,37 +113,27 @@ case "$PLUTO_VERB" in
         ip route del ${AI_SITE_SUBNET} dev xfrm0 2>/dev/null || true
         ;;
 esac
-UPDOWN
-# Substitute the actual subnet value
-sed -i "s|\${AI_SITE_SUBNET}|${AI_SITE_SUBNET}|g" /etc/ipsec.d/xinle-updown.sh
+EOF
 chmod +x /etc/ipsec.d/xinle-updown.sh
-print_info "updown script created at /etc/ipsec.d/xinle-updown.sh"
+print_info "Updown script created at /etc/ipsec.d/xinle-updown.sh."
 
-# --- 6. Configure Firewall (UFW + iptables) ---
+# --- 7. Configure Firewall ---
 print_header "Configuring Firewall (UFW + iptables)"
+ufw allow 500/udp  comment 'IPsec IKE'
+ufw allow 4500/udp comment 'IPsec NAT-T'
 
-# Open IKE/NAT-T ports
-ufw allow 500/udp
-ufw allow 4500/udp
-print_info "UFW ports 500/udp and 4500/udp opened for IPsec."
-
-# Allow forwarding between xfrm0 (tunnel) and the Docker network
-# These rules allow the VPS to act as a router between the two networks
-iptables -C FORWARD -i xfrm0 -j ACCEPT 2>/dev/null || \
-    iptables -I FORWARD -i xfrm0 -j ACCEPT
-iptables -C FORWARD -o xfrm0 -j ACCEPT 2>/dev/null || \
-    iptables -I FORWARD -o xfrm0 -j ACCEPT
-
-# Save iptables rules so they persist across reboots
-# (iptables-persistent was installed above)
+# Allow forwarding between the tunnel interface and the Docker network.
+# Docker sets the default FORWARD policy to DROP, so these rules are required.
+iptables -C FORWARD -i xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -i xfrm0 -j ACCEPT
+iptables -C FORWARD -o xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -o xfrm0 -j ACCEPT
 netfilter-persistent save
-print_info "iptables FORWARD rules added and saved."
+print_info "UFW ports opened; iptables FORWARD rules added and saved."
 
-# --- 7. Create Virtual Tunnel Interface (xfrm0) ---
+# --- 8. Create xfrm0 Systemd Service ---
 print_header "Creating Virtual Tunnel Interface (xfrm0)"
 cat > /etc/systemd/system/xfrm0-interface.service << EOF
 [Unit]
-Description=Persistent xfrm0 Tunnel Interface for Xinle IPsec VPN
+Description=Xinle xfrm0 Tunnel Interface (IPsec Site-to-Site VPN)
 After=network.target ipsec.service
 Wants=ipsec.service
 
@@ -155,20 +141,21 @@ Wants=ipsec.service
 Type=oneshot
 RemainAfterExit=yes
 
-# Create the xfrm interface bound to if_id ${XFRM_IF_ID}
+# Create the virtual XFRM interface bound to if_id ${XFRM_IF_ID}
+# (must match if_id_in/if_id_out in ipsec.conf)
 ExecStart=/sbin/ip link add xfrm0 type xfrm dev eth0 if_id ${XFRM_IF_ID}
 ExecStart=/sbin/ip addr add ${TUNNEL_IP}/32 dev xfrm0
 ExecStart=/sbin/ip link set xfrm0 up
 
-# Add static route to the remote LAN via the tunnel interface
+# Static route: send traffic for the UDM Pro LAN through the tunnel
 ExecStart=/sbin/ip route replace ${AI_SITE_SUBNET} dev xfrm0
 
-# Re-apply iptables FORWARD rules (in case they were lost)
-ExecStart=/sbin/iptables -C FORWARD -i xfrm0 -j ACCEPT || /sbin/iptables -I FORWARD -i xfrm0 -j ACCEPT
-ExecStart=/sbin/iptables -C FORWARD -o xfrm0 -j ACCEPT || /sbin/iptables -I FORWARD -o xfrm0 -j ACCEPT
+# Re-apply iptables FORWARD rules (in case netfilter state was lost)
+ExecStart=/bin/sh -c 'iptables -C FORWARD -i xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -i xfrm0 -j ACCEPT'
+ExecStart=/bin/sh -c 'iptables -C FORWARD -o xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -o xfrm0 -j ACCEPT'
 
-ExecStop=/sbin/ip route del ${AI_SITE_SUBNET} dev xfrm0
-ExecStop=/sbin/ip link del xfrm0
+ExecStop=/sbin/ip route del ${AI_SITE_SUBNET} dev xfrm0 2>/dev/null || true
+ExecStop=/sbin/ip link del xfrm0 2>/dev/null || true
 
 [Install]
 WantedBy=multi-user.target
@@ -177,33 +164,15 @@ EOF
 systemctl daemon-reload
 systemctl enable xfrm0-interface.service
 systemctl start xfrm0-interface.service
-print_info "xfrm0 interface created (if_id=${XFRM_IF_ID}) at ${TUNNEL_IP} and will persist on reboot."
+print_info "xfrm0 interface created (if_id=${XFRM_IF_ID}), address ${TUNNEL_IP}, route to ${AI_SITE_SUBNET} added."
 
-# --- 8. Start & Enable IPsec Service ---
-print_header "Starting and Enabling strongSwan Service"
+# --- 9. Start IPsec Service ---
+print_header "Starting strongSwan (ipsec) Service"
 systemctl restart ipsec
 systemctl enable ipsec
-print_info "strongSwan service started and enabled."
+print_info "strongSwan started and enabled."
 
-# --- 9. Display UDM Pro Configuration ---
-VPS_PUBLIC_IP=$(curl -s ifconfig.me)
-print_header "ACTION REQUIRED: UDM Pro Configuration"
-echo ""
-echo "  Use the following values to configure the Site-to-Site VPN in your UniFi controller:"
-echo "  ───────────────────────────────────────────────────────────────────────────"
-echo "    Pre-Shared Key : ${PSK}"
-echo "    Remote Host    : ${VPS_PUBLIC_IP}"
-echo "    Remote Network : ${DOCKER_SUBNET}   (VPS Docker subnet)"
-echo "    Local Network  : ${AI_SITE_SUBNET}  (UDM Pro LAN — already set)"
-echo "    Tunnel IP      : ${TUNNEL_IP}"
-echo "    IKE Version    : IKEv2"
-echo "    Encryption     : AES-256"
-echo "    Hash           : SHA-256"
-echo "    DH Group       : 14 (2048-bit MODP)"
-echo "    Initiator      : UDM Pro (the VPS listens and responds)"
-echo "  ───────────────────────────────────────────────────────────────────────────"
-echo ""
-echo "  IMPORTANT: After configuring the UDM Pro, verify the tunnel with:"
-echo "    sudo ipsec status"
-echo "    ping -c 3 10.1.0.1   # Should reach UDM Pro gateway"
-echo ""
+# --- 10. Save PSK for Master Script Summary ---
+echo "${PSK}" > "${PSK_FILE}"
+chmod 600 "${PSK_FILE}"
+print_info "PSK saved to ${PSK_FILE} for inclusion in deployment summary."

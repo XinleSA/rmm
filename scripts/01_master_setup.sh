@@ -2,18 +2,31 @@
 # =============================================================================
 #  Xinle 欣乐 — Master Infrastructure Setup Script & Bootstrapper
 # =============================================================================
-#  Version: 9.10
+#  Version: 10.0
 #
-#  This script is the single entry point for deploying the entire Xinle
-#  self-hosted infrastructure stack on a fresh Ubuntu 24.04.4 LTS server.
+#  Single entry point for deploying the entire Xinle self-hosted infrastructure
+#  stack on a fresh Ubuntu 24.04.4 LTS server. Run as root:
 #
-#  FIX in 9.7:  Infinite loop fix — --bootstrapped flag prevents re-running
-#               pre-flight cleanup on exec handoff. Precise Docker detection.
-#  FIX in 9.8:  IPsec rollback uses correct 'ipsec' service name on Ubuntu 24.04.
-#  FIX in 9.9:  Correct NetLock RMM image names, appsettings format, and
-#               directory seeding before docker compose up.
-#  FIX in 9.10: IPsec rollback also purges iptables-persistent, stops
-#               xfrm0-interface.service, and deletes the xfrm0 link.
+#    curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/01_master_setup.sh | sudo bash
+#
+#  What this script does (in order):
+#    0. Pre-flight cleanup of any previous failed installation traces
+#    1. Clone the repository from GitHub (bootstrap)
+#    2. Create the 'sar' service user and hand off execution
+#    3. Configure timezone, NTP, CIFS/NFS support
+#    4. Install Docker CE + Docker Compose plugin
+#    5. Install and configure Grafana Alloy metrics agent
+#    6. Create /docker_apps directory structure
+#    7. Configure IPsec site-to-site VPN (strongSwan)
+#       - Enables kernel IP forwarding
+#       - Generates PSK, writes ipsec.conf + ipsec.secrets
+#       - Creates updown script for automatic route management
+#       - Opens UFW ports 500/udp + 4500/udp
+#       - Adds iptables FORWARD rules for xfrm0 (persisted)
+#       - Creates and enables xfrm0-interface.service
+#    8. Seed NetLock RMM configuration files
+#    9. Pull and start all Docker services
+#   10. Print deployment summary with VPN credentials
 # =============================================================================
 
 set -e
@@ -24,6 +37,7 @@ readonly PROJECT_DEST="/home/ubuntu/xinle-infra"
 readonly DOCKER_APPS_DIR="/docker_apps"
 readonly TARGET_USER="sar"
 readonly TARGET_PASS="tb,Xinle2026!"
+readonly PSK_FILE="/etc/ipsec.d/psk.txt"
 
 # --- State Tracking for Rollback ---
 STATE_REPO_CLONED=false
@@ -40,7 +54,7 @@ print_info()   { echo -e "\e[1;36m  $1\e[0m"; }
 print_warn()   { echo -e "\e[1;33m  WARNING: $1\e[0m"; }
 print_error()  { echo -e "\e[1;31m  ERROR: $1\e[0m" >&2; }
 
-# --- Pre-flight Cleanup Function ---
+# --- Pre-flight Cleanup ---
 pre_flight_cleanup() {
     print_header "Pre-flight Cleanup"
     print_info "Checking for traces of previous failed installations..."
@@ -61,7 +75,6 @@ pre_flight_cleanup() {
         sudo rm -rf "$DOCKER_APPS_DIR" || true
         traces_found=true
     fi
-    # Use a precise check for the docker-ce package
     if dpkg-query -W -f='${Status}' docker-ce 2>/dev/null | grep -q "install ok installed"; then
         print_warn "Found existing Docker installation. Purging..."
         sudo apt-get --allow-remove-essential -y purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || true
@@ -76,7 +89,7 @@ pre_flight_cleanup() {
     fi
 }
 
-# --- Rollback Function ---
+# --- Rollback ---
 rollback() {
     local exit_code=$?
     if [ $exit_code -eq 0 ]; then return; fi
@@ -128,57 +141,61 @@ rollback() {
 
 trap rollback ERR
 
-# --- Stage 0: Pre-flight Root Check & Cleanup ---
+# =============================================================================
+#  Stage 0: Pre-flight Root Check & Cleanup
+# =============================================================================
 if [ "$1" != "--bootstrapped" ]; then
     if [ "$(id -u)" -ne 0 ]; then
-        print_error "This script must be run as root or with sudo. Please use: curl ... | sudo bash"
+        print_error "This script must be run as root or with sudo."
         exit 1
     fi
     pre_flight_cleanup
 fi
 
-# --- Stage 1: Bootstrap (run as root) ---
+# =============================================================================
+#  Stage 1: Bootstrap — Clone repo and re-exec from within it
+# =============================================================================
 if [ ! -d "$PROJECT_DEST" ]; then
     print_header "Stage 1: Bootstrap"
-    print_info "Bootstrapper mode: Git repository not found. Cloning from GitHub..."
+    print_info "Git repository not found. Cloning from GitHub..."
     if ! command -v git &> /dev/null; then
         apt-get update -qq && apt-get install -y git
     fi
     git clone "https://github.com/${GITHUB_REPO}.git" "$PROJECT_DEST"
     STATE_REPO_CLONED=true
-    print_info "Repository cloned. Re-executing script from within the repository... (passing --bootstrapped flag)"
+    print_info "Repository cloned. Re-executing from within the repository..."
     exec bash "${PROJECT_DEST}/scripts/01_master_setup.sh" --bootstrapped
 fi
 
-# --- Stage 2: User Creation & Handoff (run as root) ---
+# =============================================================================
+#  Stage 2: User Creation & Handoff (runs as root)
+# =============================================================================
 if [ "$(whoami)" == "root" ]; then
     print_header "Stage 2: User Creation & Handoff"
 
-    print_info "Creating user '$TARGET_USER'..."
     if ! id -u "$TARGET_USER" >/dev/null 2>&1; then
         useradd -m -s /bin/bash -G sudo "$TARGET_USER"
         echo "${TARGET_USER}:${TARGET_PASS}" | chpasswd
-        STATE_USER_CREATED=true
-        print_info "User '$TARGET_USER' created with password."
+        print_info "User '$TARGET_USER' created."
     else
         print_info "User '$TARGET_USER' already exists."
-        STATE_USER_CREATED=true # Assume it's ours if it exists
     fi
+    STATE_USER_CREATED=true
 
-    print_info "Adding '$TARGET_USER' to the 'docker' group..."
     getent group docker >/dev/null || groupadd docker
     usermod -aG docker "$TARGET_USER"
 
-    print_info "Transferring repository ownership to '$TARGET_USER'..."
     chown -R "$TARGET_USER":"$TARGET_USER" "$PROJECT_DEST"
 
     print_info "Handing off execution to user '$TARGET_USER'..."
     exec sudo -u "$TARGET_USER" -H bash "${PROJECT_DEST}/scripts/01_master_setup.sh" --bootstrapped
 fi
 
-# --- Stage 3: Main Infrastructure Setup (run as TARGET_USER) ---
+# =============================================================================
+#  Stage 3: Main Infrastructure Setup (runs as TARGET_USER)
+# =============================================================================
 if [ "$(whoami)" != "$TARGET_USER" ]; then
-    print_error "This stage must be run as user '$TARGET_USER', but is running as '$(whoami)'. Aborting."
+    print_error "Stage 3 must run as '$TARGET_USER' but is running as '$(whoami)'. Aborting."
     exit 1
 fi
 
@@ -188,40 +205,51 @@ cd "$PROJECT_DEST"
 print_info "Pulling latest changes from GitHub..."
 git pull origin main --rebase
 
-# --- System Configuration ---
+# ---------------------------------------------------------------------------
+#  System Configuration
+# ---------------------------------------------------------------------------
 print_header "Configuring Timezone, NTP, and Share Support"
 sudo timedatectl set-timezone "America/Chicago"
 sudo apt-get update -qq
 sudo apt-get install -y ntp cifs-utils nfs-common
 sudo systemctl restart ntp
-print_info "Timezone, NTP, CIFS, and NFS support configured."
+print_info "Timezone (America/Chicago), NTP, CIFS, and NFS support configured."
 
-# --- Docker Installation ---
-print_header "Installing Docker and Docker Compose"
+# ---------------------------------------------------------------------------
+#  Docker Installation
+# ---------------------------------------------------------------------------
+print_header "Installing Docker CE and Docker Compose Plugin"
 if ! command -v docker &> /dev/null; then
     sudo apt-get install -y ca-certificates curl
     sudo install -m 0755 -d /etc/apt/keyrings
-    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
     sudo chmod a+r /etc/apt/keyrings/docker.asc
     echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+      https://download.docker.com/linux/ubuntu \
       $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
       sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
     sudo apt-get update -qq
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
 fi
 STATE_DOCKER_INSTALLED=true
 print_info "Docker is installed and running."
 
-# --- Grafana Alloy (Metrics Agent) Installation ---
+# ---------------------------------------------------------------------------
+#  Grafana Alloy (Metrics Agent)
+# ---------------------------------------------------------------------------
 print_header "Installing Grafana Alloy for Metrics Collection"
 sudo mkdir -p /etc/alloy
 sudo cp "$PROJECT_DEST/monitoring/alloy-config.river" /etc/alloy/config.river
 
 if ! command -v alloy &> /dev/null; then
     sudo apt-get install -y wget
-    wget -qO- https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/grafana.gpg > /dev/null
-    echo "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+    wget -qO- https://apt.grafana.com/gpg.key | \
+        gpg --dearmor | sudo tee /usr/share/keyrings/grafana.gpg > /dev/null
+    echo "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main" | \
+        sudo tee /etc/apt/sources.list.d/grafana.list
     sudo apt-get update -qq
     sudo apt-get install -y alloy
 fi
@@ -230,61 +258,105 @@ sudo chown -R alloy:alloy /etc/alloy
 sudo systemctl enable alloy
 sudo systemctl start alloy
 STATE_ALLOY_INSTALLED=true
-print_info "Grafana Alloy installed and configured to send metrics to fenix.xinle.biz."
+print_info "Grafana Alloy installed and configured."
 
-# --- Create Docker Application Directory ---
+# ---------------------------------------------------------------------------
+#  Docker Application Directory
+# ---------------------------------------------------------------------------
 print_header "Creating Docker Application Directory"
 sudo mkdir -p "$DOCKER_APPS_DIR"
 sudo chown -R "$TARGET_USER":"$TARGET_USER" "$DOCKER_APPS_DIR"
 STATE_DOCKER_DIR_CREATED=true
 print_info "Directory $DOCKER_APPS_DIR created and owned by ${TARGET_USER}."
 
-# --- Set up IPsec Site-to-Site VPN ---
+# ---------------------------------------------------------------------------
+#  IPsec Site-to-Site VPN
+#  All routing, firewall, and kernel configuration is handled inside
+#  05_setup_ipsec_vpn.sh — no manual post-install steps required.
+# ---------------------------------------------------------------------------
 print_header "Setting up IPsec Site-to-Site VPN"
 sudo chmod +x "$PROJECT_DEST/scripts/05_setup_ipsec_vpn.sh"
 sudo "$PROJECT_DEST/scripts/05_setup_ipsec_vpn.sh"
 STATE_IPSEC_INSTALLED=true
 
-# --- Seed NetLock RMM Configuration Files ---
+# ---------------------------------------------------------------------------
+#  NetLock RMM Configuration Seeding
+# ---------------------------------------------------------------------------
 print_header "Seeding NetLock RMM Configuration"
 sudo mkdir -p /docker_apps/netlockrmm/server/internal
 sudo mkdir -p /docker_apps/netlockrmm/server/files
 sudo mkdir -p /docker_apps/netlockrmm/server/logs
 sudo mkdir -p /docker_apps/netlockrmm/web
-# Only seed the appsettings if they don't already exist (preserve user edits)
 if [ ! -f /docker_apps/netlockrmm/server/appsettings.json ]; then
-    sudo cp "$PROJECT_DEST/scripts/netlock-server-appsettings.json" /docker_apps/netlockrmm/server/appsettings.json
+    sudo cp "$PROJECT_DEST/scripts/netlock-server-appsettings.json" \
+        /docker_apps/netlockrmm/server/appsettings.json
     print_info "Seeded NetLock RMM server appsettings.json"
 fi
 if [ ! -f /docker_apps/netlockrmm/web/appsettings.json ]; then
-    sudo cp "$PROJECT_DEST/scripts/netlock-web-appsettings.json" /docker_apps/netlockrmm/web/appsettings.json
+    sudo cp "$PROJECT_DEST/scripts/netlock-web-appsettings.json" \
+        /docker_apps/netlockrmm/web/appsettings.json
     print_info "Seeded NetLock RMM web console appsettings.json"
 fi
 sudo chown -R "$TARGET_USER":"$TARGET_USER" /docker_apps/netlockrmm
 print_info "NetLock RMM configuration directories ready."
 
-# --- Start All Docker Services ---
-print_header "Starting All Docker Services"
+# ---------------------------------------------------------------------------
+#  Start All Docker Services
+#  Pull images individually so a single registry failure doesn't abort
+#  the entire deployment. Containers are started even if a pull is stale.
+# ---------------------------------------------------------------------------
+print_header "Pulling Docker Images"
 cd "$PROJECT_DEST"
+# Pull each service individually; warn on failure but do not abort
+while IFS= read -r service; do
+    print_info "Pulling image for: ${service}"
+    sudo docker compose pull "$service" 2>&1 || \
+        print_warn "Could not pull latest image for '${service}'. Using cached version if available."
+done < <(sudo docker compose config --services)
 
-print_info "Pulling latest images for all services... (This may take a while)"
-sudo docker compose pull
-
-print_info "Starting containers in detached mode..."
+print_header "Starting All Docker Services"
 sudo docker compose up -d
 STATE_DOCKER_COMPOSE_UP=true
+print_info "All Docker services started."
 
-print_info "Docker services started."
+# ---------------------------------------------------------------------------
+#  Deployment Summary
+# ---------------------------------------------------------------------------
+VPS_PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "<VPS_IP>")
+VPN_PSK=$(cat "${PSK_FILE}" 2>/dev/null || echo "<see /etc/ipsec.d/psk.txt>")
 
-# --- Final Instructions ---
-print_header "DEPLOYMENT COMPLETE — ACTION REQUIRED"
+print_header "DEPLOYMENT COMPLETE"
 echo ""
-echo "  The core infrastructure is now running under user '$TARGET_USER'."
-echo "  1.  **Configure UDM Pro VPN:** Use the IPsec parameters printed above."
-echo "  2.  **Configure Nginx Proxy Manager:** Access at http://$(curl -s ifconfig.me):81."
-echo "  3.  **Check Grafana:** Your new dashboards should appear in Grafana at https://fenix.xinle.biz/grafana shortly."
+echo -e "\e[1;32m  All services are running. Complete the following steps to finish setup:\e[0m"
+echo ""
+echo "  ┌─────────────────────────────────────────────────────────────────────┐"
+echo "  │  STEP 1 — Cloudflare DNS                                            │"
+echo "  │  Add an A record: rmmx.xinle.biz → ${VPS_PUBLIC_IP}                │"
+echo "  │  Set proxy status to DNS Only (grey cloud) initially.               │"
+echo "  ├─────────────────────────────────────────────────────────────────────┤"
+echo "  │  STEP 2 — UDM Pro Site-to-Site VPN (UniFi → Settings → Networks)   │"
+echo "  │                                                                     │"
+echo "  │  Pre-Shared Key : ${VPN_PSK}                                        │"
+echo "  │  Server Address : ${VPS_PUBLIC_IP}  (Remote Host = VPS)             │"
+echo "  │  Remote Subnets : 172.20.0.0/16   (VPS Docker network)             │"
+echo "  │  Local Subnets  : 10.1.0.0/24     (UDM Pro LAN)                   │"
+echo "  │  IKE Version    : IKEv2                                             │"
+echo "  │  Encryption     : AES-256                                           │"
+echo "  │  Hash           : SHA-256                                           │"
+echo "  │  DH Group       : 14 (2048-bit MODP)                               │"
+echo "  │  PFS            : Enabled (Group 14)                                │"
+echo "  │                                                                     │"
+echo "  │  NOTE: The UDM Pro must INITIATE the tunnel. The VPS listens.      │"
+echo "  │  Verify: sudo ipsec status && ping -c 3 10.1.0.1                   │"
+echo "  ├─────────────────────────────────────────────────────────────────────┤"
+echo "  │  STEP 3 — Nginx Proxy Manager                                       │"
+echo "  │  Access at: http://${VPS_PUBLIC_IP}:81                              │"
+echo "  │  Default login: admin@example.com / changeme                        │"
+echo "  │  See docs/POST_INSTALL_RUNBOOK.md for full NPM configuration.       │"
+echo "  └─────────────────────────────────────────────────────────────────────┘"
+echo ""
+echo "  Full runbook: ${PROJECT_DEST}/docs/POST_INSTALL_RUNBOOK.md"
 echo ""
 
-# --- Disable Rollback Trap on Successful Exit ---
 trap - ERR
 exit 0
