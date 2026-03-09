@@ -105,10 +105,12 @@ rollback() {
         sudo systemctl stop ipsec || true
         sudo systemctl stop xfrm0-interface.service || true
         sudo systemctl disable xfrm0-interface.service || true
-        sudo apt-get purge -y strongswan strongswan-starter iptables-persistent || true
+        sudo apt-get purge -y strongswan strongswan-starter || true
         sudo rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/ipsec.d || true
         sudo rm -f /etc/systemd/system/xfrm0-interface.service || true
         sudo ip link del xfrm0 2>/dev/null || true
+        # Remove xfrm0 FORWARD rules from UFW before.rules
+        sudo sed -i '/# Xinle xfrm0 FORWARD rules/,/^-A FORWARD -o xfrm0 -j ACCEPT/d' /etc/ufw/before.rules 2>/dev/null || true
         sudo systemctl daemon-reload || true
     fi
     if [ "$STATE_DOCKER_DIR_CREATED" = true ]; then

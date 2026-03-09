@@ -2,31 +2,32 @@
 # =============================================================================
 #  Xinle 欣乐 — IPsec Site-to-Site VPN Setup Script
 # =============================================================================
-#  Version: 7.2
+#  Version: 7.3
 #
 #  Called by 01_master_setup.sh as part of the main install flow.
 #  All fixes are built in — no manual post-install steps required.
 #
 #  What this script configures:
-#  1. Installs strongSwan + iptables-persistent
+#  1. Installs strongSwan (no iptables-persistent — conflicts with UFW)
 #  2. Enables kernel IP forwarding (net.ipv4.ip_forward=1), persistent
 #  3. Generates a random 32-char PSK and writes /etc/ipsec.secrets
 #  4. Writes /etc/ipsec.conf with:
 #       - auto=add  (UDM Pro initiates; VPS listens)
-#       - if_id_in/out bound to xfrm0 interface
+#       - if_id_in/out=42 bound to xfrm0 interface
 #       - IKEv2, AES-256, SHA-256, DH Group 14
 #       - DPD restart on dead peer
 #  5. Creates /etc/ipsec.d/xinle-updown.sh to add/remove the route to
 #     10.1.0.0/24 whenever the tunnel comes up or goes down
 #  6. Opens UFW ports 500/udp and 4500/udp
-#  7. Adds iptables FORWARD rules for xfrm0 and saves them persistently
+#  7. Persists iptables FORWARD rules for xfrm0 via UFW's before.rules
+#     (avoids iptables-persistent which conflicts with and removes UFW)
 #  8. Creates and enables xfrm0-interface.service (systemd) which:
 #       - Creates the xfrm0 virtual interface bound to if_id 42
 #       - Assigns tunnel IP 172.20.10.1/32
 #       - Adds static route to 10.1.0.0/24 via xfrm0
+#       - Re-applies iptables FORWARD rules on every boot
 #  9. Starts and enables the ipsec service
-# 10. Saves the PSK to /etc/ipsec.d/psk.txt for the master script to
-#     include in the final deployment summary
+# 10. Saves the PSK to /etc/ipsec.d/psk.txt for the master script summary
 # =============================================================================
 
 set -e
@@ -43,18 +44,13 @@ print_header() { echo -e "\n\e[1;35m--- $1 ---\e[0m"; }
 print_info()   { echo -e "\e[1;36m  $1\e[0m"; }
 
 # --- 1. Install strongSwan ---
+# NOTE: Do NOT install iptables-persistent — it conflicts with UFW on Ubuntu
+# 24.04 and apt will remove UFW to satisfy the dependency. We persist rules
+# via UFW's before.rules instead (see Step 7).
 print_header "Installing strongSwan IPsec VPN"
-
-# Pre-seed debconf so iptables-persistent never shows an interactive dialog.
-# The 'Save current IPv4/IPv6 rules?' prompts would block a non-interactive
-# script. We answer 'true' (yes) to both so rules are saved on install.
-apt-get install -y debconf-utils
-echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
-echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
-
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y strongswan strongswan-starter iptables-persistent
+apt-get install -y strongswan strongswan-starter
 
 # --- 2. Enable IP Forwarding ---
 print_header "Enabling Kernel IP Forwarding"
@@ -70,6 +66,7 @@ PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
 print_info "PSK generated."
 
 # --- 4. Write IPsec Secrets ---
+mkdir -p /etc/ipsec.d
 cat > /etc/ipsec.secrets << EOF
 : PSK "${PSK}"
 EOF
@@ -111,7 +108,6 @@ print_info "ipsec.conf written."
 
 # --- 6. Create Updown Script (manages route on tunnel up/down) ---
 print_header "Creating IPsec Updown Script"
-mkdir -p /etc/ipsec.d
 cat > /etc/ipsec.d/xinle-updown.sh << EOF
 #!/bin/bash
 case "\$PLUTO_VERB" in
@@ -127,16 +123,34 @@ chmod +x /etc/ipsec.d/xinle-updown.sh
 print_info "Updown script created at /etc/ipsec.d/xinle-updown.sh."
 
 # --- 7. Configure Firewall ---
-print_header "Configuring Firewall (UFW + iptables)"
+print_header "Configuring Firewall (UFW)"
+
+# Open IKE and NAT-T ports for IPsec
 ufw allow 500/udp  comment 'IPsec IKE'
 ufw allow 4500/udp comment 'IPsec NAT-T'
 
-# Allow forwarding between the tunnel interface and the Docker network.
-# Docker sets the default FORWARD policy to DROP, so these rules are required.
+# Persist FORWARD rules for xfrm0 via UFW's before.rules.
+# This is the correct approach when UFW is the system firewall — it avoids
+# installing iptables-persistent which conflicts with UFW on Ubuntu 24.04.
+# UFW loads before.rules at startup before its own rules, so these FORWARD
+# rules are always present regardless of Docker's FORWARD chain policy.
+UFW_BEFORE="/etc/ufw/before.rules"
+XFRM_MARKER="# Xinle xfrm0 FORWARD rules"
+if ! grep -q "$XFRM_MARKER" "$UFW_BEFORE"; then
+    # Insert after the *filter table header line
+    sed -i "/^\*filter/a \\
+${XFRM_MARKER}\\
+-A FORWARD -i xfrm0 -j ACCEPT\\
+-A FORWARD -o xfrm0 -j ACCEPT" "$UFW_BEFORE"
+    print_info "xfrm0 FORWARD rules added to $UFW_BEFORE (persistent via UFW)."
+else
+    print_info "xfrm0 FORWARD rules already present in $UFW_BEFORE."
+fi
+
+# Apply the rules immediately (without reloading UFW which would drop connections)
 iptables -C FORWARD -i xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -i xfrm0 -j ACCEPT
 iptables -C FORWARD -o xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -o xfrm0 -j ACCEPT
-netfilter-persistent save
-print_info "UFW ports opened; iptables FORWARD rules added and saved."
+print_info "UFW ports opened; iptables FORWARD rules applied and persisted."
 
 # --- 8. Create xfrm0 Systemd Service ---
 print_header "Creating Virtual Tunnel Interface (xfrm0)"
@@ -159,7 +173,7 @@ ExecStart=/sbin/ip link set xfrm0 up
 # Static route: send traffic for the UDM Pro LAN through the tunnel
 ExecStart=/sbin/ip route replace ${AI_SITE_SUBNET} dev xfrm0
 
-# Re-apply iptables FORWARD rules (in case netfilter state was lost)
+# Re-apply iptables FORWARD rules on every boot
 ExecStart=/bin/sh -c 'iptables -C FORWARD -i xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -i xfrm0 -j ACCEPT'
 ExecStart=/bin/sh -c 'iptables -C FORWARD -o xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -o xfrm0 -j ACCEPT'
 
