@@ -13,5 +13,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs — tracked in error_logs/ only, not root
 *.log
+!error_logs/*.log
