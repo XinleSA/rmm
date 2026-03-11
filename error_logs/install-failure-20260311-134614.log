@@ -1,0 +1,81 @@
+[1;35m
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║          Xinle 欣乐 — Infrastructure Deployment                 ║
+  ║          Author: James Barrett | Xinle, LLC                     ║
+  ║          Version: 13.1.0                                        ║
+  ╚══════════════════════════════════════════════════════════════════╝
+[0m
+
+[1;35m################################################################################[0m
+[1;35m  Stage 1: Environment Configuration[0m
+[1;35m################################################################################[0m
+
+[1;33m  Enter the following values to configure your deployment.[0m
+[1;33m  Passwords are hidden as you type and must be confirmed.[0m
+
+[1;36m  ── PostgreSQL ──────────────────────────────────────────────────────────[0m
+  PostgreSQL database name [xinle_db]:   PostgreSQL username [sar]:   PostgreSQL password: 
+  Confirm PostgreSQL password: 
+
+[1;36m  ── MySQL ───────────────────────────────────────────────────────────────[0m
+  MySQL root password: 
+  Confirm MySQL root password: 
+  MySQL app user password: 
+  Confirm MySQL app user password: 
+
+[1;36m  ── pgAdmin ─────────────────────────────────────────────────────────────[0m
+  pgAdmin admin password: 
+  Confirm pgAdmin admin password: 
+
+[1;36m  ── Application Database Names ──────────────────────────────────────────[0m
+  n8n database name [n8n]:   Forgejo database name [forgejo]: 
+[1;33m  ── Review ──────────────────────────────────────────────────────────────[0m
+
+    POSTGRES_DB:                   xinle_db
+    POSTGRES_USER:                 sar
+    POSTGRES_PASSWORD:             <hidden>
+    MYSQL_ROOT_PASSWORD:           <hidden>
+    MYSQL_PASSWORD:                <hidden>
+    PGADMIN_PASSWORD:              <hidden>
+    N8N_DB:                        n8n
+    FORGEJO_DB:                    forgejo
+
+  Proceed with these settings? [Y/n]: [1;36m  [INFO]  Writing .env ...[0m
+[1;32m  [OK]    .env written and secured (chmod 600).[0m
+
+[1;35m################################################################################[0m
+[1;35m  Stage 2: Pre-flight Cleanup[0m
+[1;35m################################################################################[0m
+[1;33m  [WARN]  Removing existing user 'sar'...[0m
+info: Looking for files to backup/remove ...
+info: Removing files ...
+info: Removing crontab ...
+info: Removing user `sar' ...
+[1;33m  [WARN]  Removing existing Docker installation...[0m
+[1;32m  [OK]    Pre-flight cleanup complete.[0m
+
+[1;35m################################################################################[0m
+[1;35m  Stage 3: Service User 'sar'[0m
+[1;35m################################################################################[0m
+[1;32m  [OK]    User 'sar' created.[0m
+[1;32m  [OK]    User configured.[0m
+
+[1;35m################################################################################[0m
+[1;35m  Stage 4: Timezone & NTP[0m
+[1;35m################################################################################[0m
+E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 59281 (apt-get)
+E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?
+
+[1;35m################################################################################[0m
+[1;35m  ROLLBACK INITIATED (exit code: 100) — Wed Mar 11 13:47:22 CDT 2026[0m
+[1;35m################################################################################[0m
+[1;36m  [INFO]  Removing user 'sar'...[0m
+info: Looking for files to backup/remove ...
+info: Removing files ...
+info: Removing crontab ...
+info: Removing user `sar' ...
+[1;36m  [INFO]  Removing .env...[0m
+
+[1;35m################################################################################[0m
+[1;35m  ROLLBACK COMPLETE — Pushing error log to GitHub[0m
+[1;35m################################################################################[0m
