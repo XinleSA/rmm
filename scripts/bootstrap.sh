@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 1.0.0
+# Version: 1.1.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -49,14 +49,39 @@ if ! command -v git &>/dev/null || ! command -v curl &>/dev/null; then
     apt-get update -qq && apt-get install -y git curl
 fi
 
+# Prompt for GitHub PAT — needed to push install logs back to the repo.
+# The repo is public so cloning works without auth, but pushing requires it.
+echo ""
+echo -e "${C}  A GitHub Personal Access Token (PAT) is needed to push install${NC}"
+echo -e "${C}  logs back to the repository for later review.${NC}"
+echo ""
+echo -e "${C}  To create one: https://github.com/settings/tokens${NC}"
+echo -e "${C}  Required scope: repo (full control)${NC}"
+echo ""
+printf "  GitHub PAT (leave blank to skip log push): " > /dev/tty
+GITHUB_PAT=""
+read -r GITHUB_PAT < /dev/tty
+echo ""
+export GITHUB_PAT
+
+# Build the authenticated remote URL if PAT was provided
+if [ -n "$GITHUB_PAT" ]; then
+    CLONE_URL="https://${GITHUB_PAT}@github.com/${GITHUB_REPO}.git"
+else
+    CLONE_URL="https://github.com/${GITHUB_REPO}.git"
+    echo -e "${Y}  [WARN]  No PAT provided. Install logs will be saved locally only.${NC}"
+fi
+
 # Clone or update the repo
 if [ ! -d "${PROJECT_DEST}/.git" ]; then
     echo -e "${C}  [INFO]  Cloning repository to ${PROJECT_DEST}...${NC}"
-    git clone "https://github.com/${GITHUB_REPO}.git" "$PROJECT_DEST"
+    git clone "$CLONE_URL" "$PROJECT_DEST"
     echo -e "${G}  [OK]    Repository cloned.${NC}"
 else
     echo -e "${C}  [INFO]  Updating existing repository...${NC}"
     git config --global --add safe.directory "$PROJECT_DEST" 2>/dev/null || true
+    # Update remote URL with PAT (or anonymous if no PAT)
+    git -C "$PROJECT_DEST" remote set-url origin "$CLONE_URL"
     git -C "$PROJECT_DEST" fetch origin main
     git -C "$PROJECT_DEST" reset --hard origin/main
     echo -e "${G}  [OK]    Repository updated to latest.${NC}"

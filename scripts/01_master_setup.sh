@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.0.0
+# Version: 13.1.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -73,7 +73,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.0.0                                        ║"
+    echo "  ║          Version: 13.1.0                                        ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -128,10 +128,24 @@ push_log_to_github() {
         git config --global --add safe.directory "$PROJECT_DEST" 2>/dev/null || true
         git config user.email "deploy@xinle.biz"
         git config user.name "Xinle Deploy Bot"
+
+        # Set remote URL with embedded PAT so push never prompts for credentials.
+        # The PAT is sourced from the existing remote URL set by bootstrap.sh,
+        # or falls back to unauthenticated (public repo read — push will warn).
+        local current_remote
+        current_remote=$(git remote get-url origin 2>/dev/null || echo "")
+        if [[ "$current_remote" != *"@github.com"* ]]; then
+            # No PAT embedded yet — try to set one if GITHUB_PAT env var is set,
+            # otherwise push will attempt anonymous (will fail on private repos)
+            if [ -n "${GITHUB_PAT:-}" ]; then
+                git remote set-url origin "https://${GITHUB_PAT}@github.com/${GITHUB_REPO}.git"
+            fi
+        fi
+
         mkdir -p error_logs
 
-        # Sanitize — strip passwords before pushing
-        sed -E 's/(PASSWORD|PASSWD|password|passwd|PSK|psk)=[^[:space:]]*/\1=<REDACTED>/g' \
+        # Sanitize — strip passwords/tokens before pushing
+        sed -E 's/(PASSWORD|PASSWD|password|passwd|PSK|psk|TOKEN|token|PAT|ghp_[A-Za-z0-9]+)=[^[:space:]]*/\1=<REDACTED>/g' \
             "$LOG_FILE" > "$logname"
 
         git add error_logs/
@@ -140,9 +154,9 @@ push_log_to_github() {
 Host: $(hostname) | IP: $(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo unknown)
 Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" 2>/dev/null || true
 
-        git push origin main 2>&1 && \
+        GIT_TERMINAL_PROMPT=0 git push origin main 2>&1 && \
             print_ok "Log pushed → GitHub: ${logname}" || \
-            print_warn "Log push failed. Available locally: ${LOG_FILE}"
+            print_warn "Log push skipped (no auth). Log available locally: ${LOG_FILE}"
     ) || print_warn "Log push encountered an error. Log at: ${LOG_FILE}"
 }
 
@@ -191,6 +205,9 @@ rollback() {
     [ "$STATE_NTP_CONFIGURED"     = true ] && {
         print_info "Removing custom NTP config..."
         rm -f /etc/systemd/timesyncd.conf.d/xinle-ntp.conf || true
+        # Also clean up chrony if it was installed as fallback
+        apt-get purge -y chrony 2>/dev/null || true
+        sed -i 's/^#pool/pool/g; s/^#server/server/g' /etc/chrony/chrony.conf 2>/dev/null || true
     }
     [ "$STATE_USER_CREATED"       = true ] && {
         print_info "Removing user '${TARGET_USER}'..."
@@ -341,22 +358,42 @@ print_ok "User configured."
 # =============================================================================
 print_header "Stage 4: Timezone & NTP"
 
-timedatectl set-timezone "America/Chicago"
+timedatectl set-timezone "America/Chicago" || true
 apt-get update -qq
 apt-get install -y cifs-utils nfs-common
 
-mkdir -p /etc/systemd/timesyncd.conf.d
-cat > /etc/systemd/timesyncd.conf.d/xinle-ntp.conf << 'NTP_EOF'
+# Determine NTP method — timedatectl set-ntp is blocked on many VPS/container
+# environments (returns "NTP not supported"). Fall back to chrony which works
+# universally including inside OpenVZ, LXC, and restricted KVM VMs.
+NTP_METHOD="none"
+
+if timedatectl set-ntp true 2>/dev/null; then
+    # systemd-timesyncd is available and allowed
+    mkdir -p /etc/systemd/timesyncd.conf.d
+    cat > /etc/systemd/timesyncd.conf.d/xinle-ntp.conf << 'NTP_EOF'
 [Time]
 NTP=us.pool.ntp.org
 FallbackNTP=pool.ntp.org
 NTP_EOF
+    systemctl restart systemd-timesyncd 2>/dev/null || true
+    NTP_METHOD="systemd-timesyncd"
+else
+    # Fall back to chrony — works in all VPS/container environments
+    print_warn "systemd-timesyncd NTP not supported on this host. Installing chrony..."
+    apt-get install -y chrony
+    # Configure chrony to use us.pool.ntp.org
+    if grep -q "^pool\|^server" /etc/chrony/chrony.conf 2>/dev/null; then
+        # Comment out existing pool/server lines and add ours
+        sed -i 's/^pool/#pool/g; s/^server/#server/g' /etc/chrony/chrony.conf
+    fi
+    grep -q "us.pool.ntp.org" /etc/chrony/chrony.conf 2>/dev/null ||         echo "pool us.pool.ntp.org iburst" >> /etc/chrony/chrony.conf
+    systemctl enable --now chrony 2>/dev/null ||         systemctl enable --now chronyd 2>/dev/null || true
+    NTP_METHOD="chrony"
+fi
 
-timedatectl set-ntp true
-systemctl restart systemd-timesyncd
 STATE_NTP_CONFIGURED=true
-print_ok "Timezone: America/Chicago | NTP: us.pool.ntp.org"
-timedatectl status | grep -E "Time zone|NTP|synchronized"
+print_ok "Timezone: America/Chicago | NTP: us.pool.ntp.org (via ${NTP_METHOD})"
+timedatectl status | grep -E "Time zone|NTP|synchronized|time" | head -5 || true
 
 # =============================================================================
 #  STAGE 5: DOCKER
