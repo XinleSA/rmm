@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.9.0
+# Version: 13.10.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -73,7 +73,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.9.0                                        ║"
+    echo "  ║          Version: 13.10.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -638,25 +638,198 @@ set -a; source "${PROJECT_DEST}/.env"; set +a
 chown -R "$TARGET_USER":"$TARGET_USER" "${DOCKER_APPS_DIR}/netlockrmm"
 
 # =============================================================================
-#  STAGE 10: PULL & START DOCKER SERVICES
+#  STAGE 10: PULL DOCKER IMAGES  (animated per-service progress)
 # =============================================================================
 print_header "Stage 10: Pulling Docker Images"
 cd "$PROJECT_DEST"
 
+# Colour / style shortcuts
+_BLD="\e[1m"
+_DIM="\e[2m"
+_RST="\e[0m"
+_GRN="\e[1;32m"
+_CYN="\e[1;36m"
+_YLW="\e[1;33m"
+_RED="\e[1;31m"
+_MGN="\e[1;35m"
+_WHT="\e[1;37m"
+
+# Spinner frames
+_SPIN=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+
+spin_start() {
+    # spin_start "label"  — runs spinner in background, stores PID in _SPIN_PID
+    local label="$1"
+    (
+        local i=0
+        while true; do
+            printf "\r  ${_CYN}${_SPIN[$i]}${_RST}  %-40s" "$label"
+            i=$(( (i+1) % ${#_SPIN[@]} ))
+            sleep 0.08
+        done
+    ) &
+    _SPIN_PID=$!
+    disown $_SPIN_PID
+}
+
+spin_stop_ok() {
+    local label="$1"
+    kill $_SPIN_PID 2>/dev/null; wait $_SPIN_PID 2>/dev/null || true
+    printf "\r  ${_GRN}✔${_RST}  %-40s ${_DIM}done${_RST}\n" "$label"
+}
+
+spin_stop_warn() {
+    local label="$1"
+    kill $_SPIN_PID 2>/dev/null; wait $_SPIN_PID 2>/dev/null || true
+    printf "\r  ${_YLW}⚠${_RST}  %-40s ${_YLW}cached/skipped${_RST}\n" "$label"
+}
+
+# Pull image map — friendly name : compose service name
+declare -A SVC_LABELS=(
+    [npm]="Nginx Proxy Manager"
+    [postgres]="PostgreSQL 16"
+    [mysql]="MySQL 8.0"
+    [n8n]="n8n Workflow Engine"
+    [forgejo]="Forgejo Git Server"
+    [pgadmin]="pgAdmin 4"
+    [phpmyadmin]="phpMyAdmin"
+    [netlockrmm-server]="NetLock RMM Server"
+    [netlockrmm-web]="NetLock RMM Web Console"
+    [alloy]="Grafana Alloy"
+)
+
+echo ""
+printf "  ${_WHT}%-3s  %-30s  %s${_RST}\n" "   " "Service" "Image"
+printf "  ${_DIM}%s${_RST}\n" "────────────────────────────────────────────────────"
+
+PULL_ERRORS=()
+SVC_NUM=0
+SVC_TOTAL=$(docker compose config --services | wc -l)
+
 while IFS= read -r svc; do
-    print_info "Pulling: ${svc}..."
-    docker compose pull "$svc" 2>&1 || \
-        print_warn "Could not pull '${svc}' — will use cached image if available."
+    SVC_NUM=$((SVC_NUM + 1))
+    label="${SVC_LABELS[$svc]:-$svc}"
+    img=$(docker compose config --format json 2>/dev/null | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); \
+          print(d['services'].get('${svc}',{}).get('image',''))" 2>/dev/null || echo "")
+    display="${label}"
+    [ -n "$img" ] && display="${label}"
+
+    spin_start "[${SVC_NUM}/${SVC_TOTAL}] ${display}"
+
+    if docker compose pull "$svc" > /tmp/pull_${svc}.log 2>&1; then
+        spin_stop_ok "[${SVC_NUM}/${SVC_TOTAL}] ${display}"
+    else
+        spin_stop_warn "[${SVC_NUM}/${SVC_TOTAL}] ${display}"
+        PULL_ERRORS+=("$svc")
+    fi
 done < <(docker compose config --services)
 
-print_header "Stage 11: Starting All Docker Services"
-docker compose up -d
-STATE_DOCKER_COMPOSE_UP=true
-print_ok "All services started."
-
-sleep 5
 echo ""
-docker compose ps
+if [ ${#PULL_ERRORS[@]} -gt 0 ]; then
+    print_warn "Some images could not be pulled: ${PULL_ERRORS[*]}"
+    print_warn "Cached images will be used where available."
+else
+    print_ok "All images pulled successfully."
+fi
+
+# =============================================================================
+#  STAGE 11: START ALL DOCKER SERVICES  (animated healthcheck monitor)
+# =============================================================================
+print_header "Stage 11: Starting All Docker Services"
+
+docker compose up -d 2>&1
+STATE_DOCKER_COMPOSE_UP=true
+
+echo ""
+print_info "Waiting for all containers to become healthy..."
+echo ""
+
+# Monitor container health with live status table
+MONITOR_TIMEOUT=180   # seconds before giving up
+MONITOR_INTERVAL=5
+MONITOR_ELAPSED=0
+ALL_HEALTHY=false
+
+# Services that have healthchecks defined
+HEALTHY_SVCS=(postgres mysql npm)
+
+while [ $MONITOR_ELAPSED -lt $MONITOR_TIMEOUT ]; do
+    ALL_GOOD=true
+    printf "\r\e[K"   # clear line
+
+    STATUS_LINE=""
+    for svc in "${HEALTHY_SVCS[@]}"; do
+        state=$(docker inspect --format='{{.State.Health.Status}}' "$svc" 2>/dev/null || echo "none")
+        case "$state" in
+            healthy)   icon="${_GRN}●${_RST}" ;;
+            starting)  icon="${_YLW}◌${_RST}" ;;
+            unhealthy) icon="${_RED}✖${_RST}"; ALL_GOOD=false ;;
+            *)         icon="${_DIM}○${_RST}" ;;
+        esac
+        STATUS_LINE+="  ${icon} ${_WHT}${svc}${_RST}"
+        [ "$state" != "healthy" ] && [ "$state" != "none" ] && ALL_GOOD=false
+    done
+
+    printf "  %s    ${_DIM}%ds${_RST}" "$STATUS_LINE" "$MONITOR_ELAPSED"
+
+    if $ALL_GOOD; then
+        ALL_HEALTHY=true
+        break
+    fi
+
+    # Check for any unhealthy containers — fail fast
+    UNHEALTHY=$(docker ps --filter health=unhealthy --format '{{.Names}}' 2>/dev/null || true)
+    if [ -n "$UNHEALTHY" ]; then
+        echo ""
+        print_error "Unhealthy containers detected: $UNHEALTHY"
+        echo ""
+        for uc in $UNHEALTHY; do
+            echo -e "  ${_RED}── $uc logs (last 20 lines) ──${_RST}"
+            docker logs --tail 20 "$uc" 2>&1 | sed 's/^/    /'
+            echo ""
+        done
+        exit 1
+    fi
+
+    sleep $MONITOR_INTERVAL
+    MONITOR_ELAPSED=$((MONITOR_ELAPSED + MONITOR_INTERVAL))
+done
+
+echo ""
+if $ALL_HEALTHY; then
+    print_ok "All containers healthy."
+else
+    print_warn "Health monitor timed out — checking final state..."
+fi
+
+echo ""
+# Final status table — coloured
+printf "  ${_BLD}${_WHT}%-25s %-15s %-15s %s${_RST}\n" "CONTAINER" "STATUS" "HEALTH" "PORTS"
+printf "  ${_DIM}%s${_RST}\n" "─────────────────────────────────────────────────────────────────"
+while IFS= read -r line; do
+    name=$(echo "$line" | awk '{print $1}')
+    status=$(echo "$line" | awk '{print $2}')
+    health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' \
+             "$name" 2>/dev/null || echo "n/a")
+    ports=$(echo "$line" | awk '{$1=$2=""; print $0}' | xargs)
+
+    case "$health" in
+        healthy)   hcol="${_GRN}" ;;
+        unhealthy) hcol="${_RED}" ;;
+        starting)  hcol="${_YLW}" ;;
+        *)         hcol="${_DIM}" ;;
+    esac
+    case "$status" in
+        running) scol="${_GRN}" ;;
+        exited)  scol="${_RED}" ;;
+        *)       scol="${_YLW}" ;;
+    esac
+
+    printf "  %-25s ${scol}%-15s${_RST} ${hcol}%-15s${_RST} %s\n" \
+        "$name" "$status" "$health" "${ports:0:40}"
+done < <(docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" \
+         2>/dev/null | tail -n +2)
 echo ""
 
 # Re-enable apt-daily timers now that install is complete
