@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.2.0
+# Version: 13.3.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -73,7 +73,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.2.0                                        ║"
+    echo "  ║          Version: 13.3.0                                        ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -283,19 +283,49 @@ echo -e "\e[1;33m  Enter the following values to configure your deployment.\e[0m
 echo -e "\e[1;33m  Passwords are hidden as you type and must be confirmed.\e[0m"
 echo ""
 
+# ---------------------------------------------------------------------------
+#  Password strategy — ask once or individually
+# ---------------------------------------------------------------------------
+echo -e "\e[1;36m  ── Password Strategy ───────────────────────────────────────────────────\e[0m"
+echo ""
+echo "  You can use a single shared password for all services (quick setup),"
+echo "  or set a unique password for each service (recommended for production)."
+echo ""
+read -rp "  Use the same password for all services? [Y/n]: " PW_SAME
+PW_SAME="${PW_SAME:-Y}"
+echo ""
+
+SHARED_PASSWORD=""
+if [[ "$PW_SAME" =~ ^[Yy]$ ]]; then
+    print_info "Enter one password — it will be used for all services."
+    echo ""
+    prompt_password "Shared password (all services)" SHARED_PASSWORD
+    ENV_POSTGRES_PASSWORD="$SHARED_PASSWORD"
+    ENV_MYSQL_ROOT_PASSWORD="$SHARED_PASSWORD"
+    ENV_MYSQL_PASSWORD="$SHARED_PASSWORD"
+    ENV_PGADMIN_PASSWORD="$SHARED_PASSWORD"
+    print_ok "Single password set for all services."
+else
+    print_info "Enter individual passwords for each service."
+    echo ""
+    echo -e "\e[1;36m  ── PostgreSQL ──────────────────────────────────────────────────────────\e[0m"
+    prompt_password "PostgreSQL password"        ENV_POSTGRES_PASSWORD
+    echo ""
+    echo -e "\e[1;36m  ── MySQL ───────────────────────────────────────────────────────────────\e[0m"
+    prompt_password "MySQL root password"        ENV_MYSQL_ROOT_PASSWORD
+    prompt_password "MySQL app user password"    ENV_MYSQL_PASSWORD
+    echo ""
+    echo -e "\e[1;36m  ── pgAdmin ─────────────────────────────────────────────────────────────\e[0m"
+    prompt_password "pgAdmin admin password"     ENV_PGADMIN_PASSWORD
+fi
+
+# ---------------------------------------------------------------------------
+#  Non-password configuration
+# ---------------------------------------------------------------------------
+echo ""
 echo -e "\e[1;36m  ── PostgreSQL ──────────────────────────────────────────────────────────\e[0m"
 prompt_required "PostgreSQL database name"  ENV_POSTGRES_DB   "xinle_db"
 prompt_required "PostgreSQL username"       ENV_POSTGRES_USER "sar"
-prompt_password "PostgreSQL password"       ENV_POSTGRES_PASSWORD
-
-echo ""
-echo -e "\e[1;36m  ── MySQL ───────────────────────────────────────────────────────────────\e[0m"
-prompt_password "MySQL root password"        ENV_MYSQL_ROOT_PASSWORD
-prompt_password "MySQL app user password"    ENV_MYSQL_PASSWORD
-
-echo ""
-echo -e "\e[1;36m  ── pgAdmin ─────────────────────────────────────────────────────────────\e[0m"
-prompt_password "pgAdmin admin password"     ENV_PGADMIN_PASSWORD
 
 echo ""
 echo -e "\e[1;36m  ── Application Database Names ──────────────────────────────────────────\e[0m"
@@ -306,14 +336,18 @@ prompt_required "Forgejo database name" ENV_FORGEJO_DB "forgejo"
 echo ""
 echo -e "\e[1;33m  ── Review ──────────────────────────────────────────────────────────────\e[0m"
 echo ""
-printf "    %-30s %s\n" "POSTGRES_DB:"          "$ENV_POSTGRES_DB"
-printf "    %-30s %s\n" "POSTGRES_USER:"        "$ENV_POSTGRES_USER"
-printf "    %-30s %s\n" "POSTGRES_PASSWORD:"    "<hidden>"
-printf "    %-30s %s\n" "MYSQL_ROOT_PASSWORD:"  "<hidden>"
-printf "    %-30s %s\n" "MYSQL_PASSWORD:"       "<hidden>"
-printf "    %-30s %s\n" "PGADMIN_PASSWORD:"     "<hidden>"
-printf "    %-30s %s\n" "N8N_DB:"               "$ENV_N8N_DB"
-printf "    %-30s %s\n" "FORGEJO_DB:"           "$ENV_FORGEJO_DB"
+printf "    %-30s %s\n" "POSTGRES_DB:"         "$ENV_POSTGRES_DB"
+printf "    %-30s %s\n" "POSTGRES_USER:"       "$ENV_POSTGRES_USER"
+if [[ "$PW_SAME" =~ ^[Yy]$ ]]; then
+    printf "    %-30s %s\n" "ALL PASSWORDS:"   "<single shared password>"
+else
+    printf "    %-30s %s\n" "POSTGRES_PASSWORD:"   "<hidden>"
+    printf "    %-30s %s\n" "MYSQL_ROOT_PASSWORD:" "<hidden>"
+    printf "    %-30s %s\n" "MYSQL_PASSWORD:"      "<hidden>"
+    printf "    %-30s %s\n" "PGADMIN_PASSWORD:"    "<hidden>"
+fi
+printf "    %-30s %s\n" "N8N_DB:"              "$ENV_N8N_DB"
+printf "    %-30s %s\n" "FORGEJO_DB:"          "$ENV_FORGEJO_DB"
 echo ""
 read -rp "  Proceed with these settings? [Y/n]: " CONFIRM
 CONFIRM="${CONFIRM:-Y}"
