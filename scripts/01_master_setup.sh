@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.11.0
+# Version: 13.12.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -73,7 +73,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.11.0                                       ║"
+    echo "  ║          Version: 13.12.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -738,9 +738,66 @@ fi
 # =============================================================================
 print_header "Stage 11: Starting All Docker Services"
 
-# Run docker compose up -d but don't let a healthcheck failure immediately
-# trigger the ERR trap. We want to capture container logs first so the
-# error log (and the operator) can see WHY the container is unhealthy.
+# Start containers with --no-deps first for MySQL alone so we can watch it
+# independently, then bring everything up.
+# Use set +e so a healthcheck failure doesn't immediately fire the ERR trap
+# before we get a chance to dump container logs.
+
+dump_failed_containers() {
+    echo ""
+    print_error "One or more containers failed — dumping logs for diagnosis:"
+    echo ""
+    for cname in $(docker ps -a --format '{{.Names}}' 2>/dev/null); do
+        cstatus=$(docker inspect --format='{{.State.Status}}' "$cname" 2>/dev/null || echo "unknown")
+        chealth=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'                   "$cname" 2>/dev/null || echo "none")
+        if [[ "$cstatus" == "exited" ]] || [[ "$chealth" == "unhealthy" ]]; then
+            echo -e "  ${_RED}━━━━━  $cname  [status=$cstatus  health=$chealth]  ━━━━━${_RST}"
+            docker logs --tail 60 "$cname" 2>&1 | sed 's/^/    /'
+            echo ""
+        fi
+    done
+}
+
+# Step 1 — Start MySQL alone first so we can see its logs if it fails
+print_info "Starting MySQL first (isolated healthcheck)..."
+set +e
+docker compose up -d --no-deps mysql 2>&1
+MYSQL_EXIT=$?
+set -e
+
+if [ $MYSQL_EXIT -ne 0 ]; then
+    dump_failed_containers
+    exit 1
+fi
+
+# Wait up to 90s for MySQL to become healthy before starting dependents
+print_info "Waiting for MySQL to become healthy (up to 90s)..."
+MYSQL_WAIT=0
+while [ $MYSQL_WAIT -lt 90 ]; do
+    mhealth=$(docker inspect --format='{{.State.Health.Status}}' mysql 2>/dev/null || echo "unknown")
+    printf "  ${_CYN}⠿${_RST}  mysql health: %-12s  %ds" "$mhealth" "$MYSQL_WAIT"
+    if [ "$mhealth" = "healthy" ]; then
+        echo ""
+        print_ok "MySQL is healthy."
+        break
+    fi
+    if [ "$mhealth" = "unhealthy" ]; then
+        echo ""
+        dump_failed_containers
+        exit 1
+    fi
+    sleep 5
+    MYSQL_WAIT=$((MYSQL_WAIT + 5))
+done
+
+if [ "$(docker inspect --format='{{.State.Health.Status}}' mysql 2>/dev/null)" != "healthy" ]; then
+    echo ""
+    dump_failed_containers
+    exit 1
+fi
+
+# Step 2 — Start everything else
+print_info "Starting all remaining services..."
 set +e
 docker compose up -d 2>&1
 COMPOSE_EXIT=$?
@@ -749,20 +806,7 @@ set -e
 STATE_DOCKER_COMPOSE_UP=true
 
 if [ $COMPOSE_EXIT -ne 0 ]; then
-    echo ""
-    print_error "docker compose up exited with code ${COMPOSE_EXIT} — dumping container logs..."
-    echo ""
-    # Dump logs for every container that is unhealthy or exited
-    for cname in $(docker ps -a --format '{{.Names}}' 2>/dev/null); do
-        cstatus=$(docker inspect --format='{{.State.Status}}' "$cname" 2>/dev/null || echo "unknown")
-        chealth=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{end}}' \
-                  "$cname" 2>/dev/null || echo "")
-        if [[ "$cstatus" == "exited" ]] || [[ "$chealth" == "unhealthy" ]]; then
-            echo -e "  ${_RED}━━━━  $cname  [status=$cstatus health=${chealth:-n/a}]  ━━━━${_RST}"
-            docker logs --tail 40 "$cname" 2>&1 | sed 's/^/    /'
-            echo ""
-        fi
-    done
+    dump_failed_containers
     exit 1
 fi
 
