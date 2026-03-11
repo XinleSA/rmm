@@ -198,11 +198,14 @@ services:
       - MYSQL_USER=sar
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "sar", "-p${MYSQL_PASSWORD}"]
+      # mysqladmin ping via unix socket needs no auth credentials.
+      # Avoids YAML variable expansion issues where -p${MYSQL_PASSWORD}
+      # is passed as a literal unexpanded string inside a list.
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "--silent"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 30s
+      retries: 15
+      start_period: 60s
 
   phpmyadmin:
     image: phpmyadmin:latest

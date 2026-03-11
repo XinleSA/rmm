@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.8.0
+# Version: 13.9.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -73,7 +73,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.8.0                                        ║"
+    echo "  ║          Version: 13.9.0                                        ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -282,7 +282,11 @@ rollback() {
     }
     [ "$STATE_DOCKER_DIR_CREATED" = true ] && {
         print_info "Removing ${DOCKER_APPS_DIR}..."
+        # Stop any containers that may have written data into the volume mounts
+        docker compose -f "${PROJECT_DEST}/docker-compose.yml" down -v             --remove-orphans 2>/dev/null || true
+        # Force-remove even if MySQL/postgres wrote data into subdirs
         rm -rf "$DOCKER_APPS_DIR" || true
+        print_info "${DOCKER_APPS_DIR} removed."
     }
     [ "$STATE_ALLOY_INSTALLED"    = true ] && {
         print_info "Removing Grafana Alloy..."
@@ -461,7 +465,9 @@ id -u "$TARGET_USER" >/dev/null 2>&1 && {
     print_warn "Removing existing user '${TARGET_USER}'..."
     deluser --remove-home "$TARGET_USER" || true; traces=true; }
 [ -d "$DOCKER_APPS_DIR" ] && {
-    print_warn "Removing existing ${DOCKER_APPS_DIR}..."
+    print_warn "Removing existing ${DOCKER_APPS_DIR} (including any MySQL/postgres data)..."
+    # Bring down containers first so they release file locks on data dirs
+    docker compose -f "${PROJECT_DEST}/docker-compose.yml" down -v         --remove-orphans 2>/dev/null || true
     rm -rf "$DOCKER_APPS_DIR" || true; traces=true; }
 dpkg-query -W -f='${Status}' docker-ce 2>/dev/null | grep -q "install ok installed" && {
     print_warn "Removing existing Docker installation..."
