@@ -220,6 +220,29 @@ services:
       mysql:
         condition: service_healthy
 
+  # ---------------------------------------------------------------------------
+  #  Grafana Alloy — metrics/logs agent (replaces system package install)
+  #  Runs as a container so it starts AFTER the stack is up, avoiding the
+  #  hang caused by the apt post-install script trying to connect too early.
+  # ---------------------------------------------------------------------------
+  alloy:
+    image: grafana/alloy:latest
+    container_name: alloy
+    restart: unless-stopped
+    networks:
+      - xinle_network
+    ports:
+      - "12345:12345"   # Alloy UI
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+    volumes:
+      - ./monitoring/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      - /storage:/storage:ro
+
 # =============================================================================
 #  Networks & Volumes
 # =============================================================================
@@ -230,3 +253,6 @@ networks:
     ipam:
       config:
         - subnet: 172.20.0.0/16
+
+volumes:
+  alloy_data:

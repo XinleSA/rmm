@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.6.0
+# Version: 13.7.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -73,7 +73,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.6.0                                        ║"
+    echo "  ║          Version: 13.7.0                                        ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -258,7 +258,7 @@ rollback() {
         print_info "Removing Grafana Alloy..."
         systemctl stop alloy 2>/dev/null || true
         apt-get purge -y alloy 2>/dev/null || true
-        rm -rf /etc/alloy /etc/apt/sources.list.d/grafana.list || true
+        rm -rf /etc/alloy /etc/apt/sources.list.d/grafana.list                /usr/share/keyrings/grafana.gpg || true
     }
     [ "$STATE_DOCKER_INSTALLED"   = true ] && {
         print_info "Removing Docker..."
@@ -526,59 +526,23 @@ STATE_DOCKER_INSTALLED=true
 print_ok "Docker $(docker --version) ready."
 
 # =============================================================================
-#  STAGE 6: GRAFANA ALLOY
+#  STAGE 6: GRAFANA ALLOY — SKIPPED (deployed as Docker container post-install)
 # =============================================================================
 print_header "Stage 6: Grafana Alloy"
-
-mkdir -p /etc/alloy
-cp "${PROJECT_DEST}/monitoring/alloy-config.alloy" /etc/alloy/config.alloy
-
-if ! command -v alloy &>/dev/null; then
-    wait_for_apt
-    apt-get install -y wget gpg
-
-    wget -qO- https://apt.grafana.com/gpg.key |         gpg --dearmor | tee /usr/share/keyrings/grafana.gpg > /dev/null
-    echo "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main" |         tee /etc/apt/sources.list.d/grafana.list
-
-    wait_for_apt
-    apt-get update -qq
-
-    # Block service auto-start during package install.
-    # Without this, dpkg runs alloy's post-install script which calls
-    # 'systemctl start alloy'. On a fresh VPS alloy tries to connect to
-    # the remote Prometheus endpoint immediately and hangs indefinitely
-    # waiting for a network response, freezing the entire install.
-    # policy-rc.d returning 101 tells dpkg "do not start this service" —
-    # the package installs cleanly and we start it manually afterwards.
-    print_info "Blocking service auto-start during package install..."
-    cat > /usr/sbin/policy-rc.d << 'POLICY_EOF'
-#!/bin/sh
-# Xinle install: prevent dpkg from auto-starting services
-exit 101
-POLICY_EOF
-    chmod +x /usr/sbin/policy-rc.d
-
-    apt-get install -y alloy
-
-    # Remove the policy block — restore normal service management
-    rm -f /usr/sbin/policy-rc.d
-    print_ok "Alloy package installed (service start blocked during install)."
-fi
-
-# Now configure and start alloy ourselves with a timeout guard
-chown -R alloy:alloy /etc/alloy
-systemctl enable alloy
-
-print_info "Starting Alloy service (10s timeout)..."
-if timeout 10 systemctl start alloy 2>/dev/null; then
-    print_ok "Alloy service started."
-else
-    print_warn "Alloy did not start within 10s — it will retry automatically via systemd."
-    print_warn "Check status later with: systemctl status alloy"
-fi
-
-STATE_ALLOY_INSTALLED=true
-print_ok "Grafana Alloy installed."
+#
+# NOTE: Alloy is NOT installed as a system package here.
+# The Alloy apt post-install script unconditionally calls 'systemctl start alloy'
+# which hangs indefinitely on a VPS because alloy attempts to connect to the
+# remote Prometheus write endpoint before the network/VPN tunnel is up.
+# policy-rc.d exit 101 was attempted but Alloy's post-install bypasses it.
+#
+# Resolution: Alloy runs as a Docker container (grafana/alloy) defined in
+# docker-compose.yml, started in Stage 10 alongside all other services.
+# The container has restart: unless-stopped and will retry on its own.
+#
+print_warn "Alloy system package install SKIPPED — will start as Docker container in Stage 10."
+print_info "Config: ${PROJECT_DEST}/monitoring/alloy-config.alloy"
+# STATE_ALLOY_INSTALLED intentionally left false — nothing to roll back here
 
 # =============================================================================
 #  STAGE 7: DOCKER APP DIRECTORY STRUCTURE
