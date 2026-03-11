@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 12.1.0
+# Version: 12.2.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -75,7 +75,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 12.1.0                                        ║"
+    echo "  ║          Version: 12.2.0                                        ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -94,16 +94,19 @@ print_error() { echo -e "\e[1;31m  [ERROR] $1\e[0m" >&2; }
 
 prompt_required() {
     # prompt_required "Label" "variable_name" [default]
+    # Reads from /dev/tty so it works even when stdin is a pipe (curl | bash)
     local label="$1"
     local varname="$2"
     local default="${3:-}"
     local value=""
     while [ -z "$value" ]; do
         if [ -n "$default" ]; then
-            read -rp "  ${label} [${default}]: " value
+            printf "  %s [%s]: " "$label" "$default" > /dev/tty
+            read -r value < /dev/tty
             value="${value:-$default}"
         else
-            read -rp "  ${label}: " value
+            printf "  %s: " "$label" > /dev/tty
+            read -r value < /dev/tty
         fi
         if [ -z "$value" ]; then
             print_warn "This field is required. Please enter a value."
@@ -114,16 +117,27 @@ prompt_required() {
 
 prompt_password() {
     # prompt_password "Label" "variable_name"
+    # Reads from /dev/tty so it works even when stdin is a pipe (curl | bash).
+    # Manually manages terminal echo so the password is hidden on screen.
     local label="$1"
     local varname="$2"
     local pass1="" pass2=""
     while true; do
-        read -rsp "  ${label}: " pass1; echo ""
+        # Disable echo, read, restore echo
+        printf "  %s: " "$label" > /dev/tty
+        stty -echo < /dev/tty
+        read -r pass1 < /dev/tty
+        stty echo < /dev/tty
+        printf "\n" > /dev/tty
         if [ -z "$pass1" ]; then
             print_warn "Password cannot be empty."
             continue
         fi
-        read -rsp "  Confirm ${label}: " pass2; echo ""
+        printf "  Confirm %s: " "$label" > /dev/tty
+        stty -echo < /dev/tty
+        read -r pass2 < /dev/tty
+        stty echo < /dev/tty
+        printf "\n" > /dev/tty
         if [ "$pass1" = "$pass2" ]; then
             break
         else
@@ -353,7 +367,9 @@ if [ "${1:-}" != "--stage3" ]; then
     echo "    N8N_DB                = ${ENV_N8N_DB}"
     echo "    FORGEJO_DB            = ${ENV_FORGEJO_DB}"
     echo ""
-    read -rp "  Proceed with these settings? [Y/n]: " CONFIRM
+    # Read confirmation from /dev/tty (stdin may be the pipe)
+    printf "  Proceed with these settings? [Y/n]: " > /dev/tty
+    read -r CONFIRM < /dev/tty
     CONFIRM="${CONFIRM:-Y}"
     if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
         print_warn "Aborted by user. No changes were made."
