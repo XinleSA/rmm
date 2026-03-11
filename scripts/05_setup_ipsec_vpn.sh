@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 7.4.0
+# Version: 7.5.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -66,7 +66,11 @@ print_info "IP forwarding enabled and persisted in /etc/sysctl.conf."
 
 # --- 3. Generate Pre-Shared Key ---
 print_header "Generating Pre-Shared Key"
-PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
+# openssl rand -hex 48 produces exactly 96 hex chars — no pipe, no SIGPIPE.
+# We take the first 32 chars with bash substring — no external commands.
+_psk_raw=$(openssl rand -hex 48)
+PSK="${_psk_raw:0:32}"
+unset _psk_raw
 print_info "PSK generated."
 
 # --- 4. Write IPsec Secrets ---
