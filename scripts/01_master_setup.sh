@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.20.0
+# Version: 13.21.0
 # Created: March 11, 2025
 # Last Modified: March 13, 2026
 #############################################################################
@@ -91,7 +91,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.20.0                                       ║"
+    echo "  ║          Version: 13.21.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -304,14 +304,13 @@ rollback() {
     }
     [ "$STATE_IPSEC_INSTALLED"    = true ] && {
         print_info "Removing strongSwan IPsec..."
-        systemctl stop ipsec xfrm0-interface.service 2>/dev/null || true
-        systemctl disable xfrm0-interface.service 2>/dev/null || true
+        systemctl stop ipsec xfrm0-interface.service xinle-firewall.service 2>/dev/null || true
+        systemctl disable xfrm0-interface.service xinle-firewall.service 2>/dev/null || true
         apt-get purge -y strongswan strongswan-starter 2>/dev/null || true
         rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/ipsec.d
         rm -f /etc/systemd/system/xfrm0-interface.service
+        rm -f /etc/systemd/system/xinle-firewall.service
         ip link del xfrm0 2>/dev/null || true
-        sed -i '/# Xinle xfrm0 FORWARD rules/,/^-A FORWARD -o xfrm0 -j ACCEPT/d' \
-            /etc/ufw/before.rules 2>/dev/null || true
         systemctl daemon-reload 2>/dev/null || true
     }
     [ "$STATE_DOCKER_DIR_CREATED" = true ] && {
@@ -506,15 +505,22 @@ dpkg-query -W -f='${Status}' docker-ce 2>/dev/null | grep -q "install ok install
         docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
     rm -rf /var/lib/docker /etc/docker || true; traces=true; }
-# Purge UFW if present from a previous run — UFW's reject chains interfere
-# with Docker's iptables rules even when "inactive". We use iptables-persistent
-# instead, which is installed cleanly by the IPsec stage.
-for _pkg in ufw; do
+# Clean up firewall packages from previous runs that conflict with our approach.
+# We use direct iptables + xinle-firewall.service (no UFW, no iptables-persistent).
+for _pkg in ufw iptables-persistent netfilter-persistent; do
     dpkg-query -W -f='${Status}' "$_pkg" 2>/dev/null | grep -q "install ok installed" && {
-        print_warn "Removing '${_pkg}' from previous run (conflicts with Docker iptables)..."
+        print_warn "Removing '${_pkg}' from previous run (conflicts with direct iptables approach)..."
         DEBIAN_FRONTEND=noninteractive apt-get -y purge "$_pkg" 2>/dev/null || true
         traces=true; } || true
 done
+# Remove stale xinle-firewall.service if present from a previous run
+[ -f /etc/systemd/system/xinle-firewall.service ] && {
+    systemctl stop xinle-firewall.service 2>/dev/null || true
+    systemctl disable xinle-firewall.service 2>/dev/null || true
+    rm -f /etc/systemd/system/xinle-firewall.service
+    systemctl daemon-reload 2>/dev/null || true
+    print_info "Removed stale xinle-firewall.service from previous run."
+    traces=true; } || true
 [ "$traces" = false ] && print_ok "System is clean." || print_ok "Pre-flight cleanup complete."
 
 # =============================================================================
@@ -688,21 +694,14 @@ chmod +x "${PROJECT_DEST}/scripts/05_setup_ipsec_vpn.sh"
 bash "${PROJECT_DEST}/scripts/05_setup_ipsec_vpn.sh"
 STATE_IPSEC_INSTALLED=true
 # =============================================================================
-#  STAGE 8b: UFW FIREWALL — OPEN REQUIRED PORTS
+#  STAGE 8b: FIREWALL VERIFICATION
 # =============================================================================
-# The IPsec script installs UFW and opens 500/4500. Here we open all ports
-# needed for NPM and the application stack to be reachable from the internet.
-print_header "Stage 8b: Opening Firewall Ports"
-if command -v ufw &>/dev/null; then
-    ufw allow 22/tcp   comment 'SSH'
-    ufw allow 80/tcp   comment 'HTTP (NPM)'
-    ufw allow 81/tcp   comment 'NPM Admin UI'
-    ufw allow 443/tcp  comment 'HTTPS (NPM)'
-    ufw --force enable
-    print_ok "UFW rules applied: SSH(22), HTTP(80), NPM Admin(81), HTTPS(443)."
-else
-    print_warn "UFW not found — skipping port rules. Ensure ports 22/80/81/443 are open."
-fi
+# The IPsec script (Stage 8) already applied all required iptables rules
+# directly and created xinle-firewall.service for boot-time persistence.
+# No UFW or iptables-persistent is used — zero package conflicts.
+print_header "Stage 8b: Firewall Verification"
+print_ok "iptables rules applied by Stage 8: SSH(22), HTTP(80), NPM Admin(81), HTTPS(443), IPsec(500/4500)."
+print_ok "xinle-firewall.service enabled — rules will persist across reboots."
 # =============================================================================
 #  STAGE 9: NETLOCK RMM CONFIG SEEDING
 # =============================================================================
