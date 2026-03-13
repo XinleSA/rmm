@@ -1,9 +1,9 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 7.7.0
+# Version: 7.8.0
 # Created: March 11, 2025
-# Last Modified: March 11, 2025
+# Last Modified: March 13, 2026
 #############################################################################
 #
 #  Xinle 欣乐 — IPsec Site-to-Site VPN Setup Script
@@ -12,7 +12,7 @@
 #  All fixes are built in — no manual post-install steps required.
 #
 #  What this script configures:
-#  1. Installs strongSwan (no iptables-persistent — conflicts with UFW)
+#  1. Installs strongSwan
 #  2. Enables kernel IP forwarding (net.ipv4.ip_forward=1), persistent
 #  3. Generates a random 32-char PSK and writes /etc/ipsec.secrets
 #  4. Writes /etc/ipsec.conf with:
@@ -22,9 +22,10 @@
 #       - DPD restart on dead peer
 #  5. Creates /etc/ipsec.d/xinle-updown.sh to add/remove the route to
 #     10.1.0.0/24 whenever the tunnel comes up or goes down
-#  6. Opens UFW ports 500/udp and 4500/udp
-#  7. Persists iptables FORWARD rules for xfrm0 via UFW's before.rules
-#     (avoids iptables-persistent which conflicts with and removes UFW)
+#  6. Disables UFW (conflicts with Docker iptables rules on Ubuntu 24.04)
+#     and uses iptables-persistent instead for rule persistence
+#  7. Sets FORWARD policy ACCEPT; disables rp_filter; persists xfrm0
+#     FORWARD rules via netfilter-persistent
 #  8. Creates and enables xfrm0-interface.service (systemd) which:
 #       - Creates the xfrm0 virtual interface bound to if_id 42
 #       - Assigns tunnel IP 172.20.10.1/32
@@ -48,9 +49,10 @@ print_header() { echo -e "\n\e[1;35m--- $1 ---\e[0m"; }
 print_info()   { echo -e "\e[1;36m  $1\e[0m"; }
 
 # --- 1. Install strongSwan ---
-# NOTE: Do NOT install iptables-persistent — it conflicts with UFW on Ubuntu
-# 24.04 and apt will remove UFW to satisfy the dependency. We persist rules
-# via UFW's before.rules instead (see Step 7).
+# NOTE: UFW is disabled by this script (Step 7) because its reject chains
+# interfere with Docker's iptables rules. iptables-persistent is used instead
+# to persist FORWARD rules across reboots. Port filtering is handled by the
+# cloud provider's firewall (ServerOptima portal).
 print_header "Installing strongSwan IPsec VPN"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -130,54 +132,50 @@ EOF
 chmod +x /etc/ipsec.d/xinle-updown.sh
 print_info "Updown script created at /etc/ipsec.d/xinle-updown.sh."
 
-# --- 7. Configure Firewall ---
-print_header "Configuring Firewall (UFW)"
+# --- 7. Configure Firewall (iptables-persistent) ---
+# We use iptables-persistent instead of UFW because:
+#   - ServerOptima and similar providers supply a cloud-level firewall
+#   - UFW conflicts with iptables-persistent on Ubuntu 24.04
+#   - Docker manages its own iptables chains; we only need to persist
+#     the xfrm0 FORWARD rules and ensure FORWARD policy stays ACCEPT
+print_header "Configuring Firewall (iptables-persistent)"
 
-# Ensure UFW is installed — minimal VPS images may not include it by default.
-# First, purge iptables-persistent/netfilter-persistent if present — they
-# conflict with UFW and their post-remove scripts can leave iptables in a
-# broken state that causes UFW's own post-install to fail.
-for _conflict_pkg in iptables-persistent netfilter-persistent; do
-    if dpkg-query -W -f='${Status}' "$_conflict_pkg" 2>/dev/null | grep -q 'install ok installed'; then
-        print_info "Purging conflicting package '${_conflict_pkg}' before UFW install..."
-        DEBIAN_FRONTEND=noninteractive apt-get -y purge "$_conflict_pkg" 2>/dev/null || true
-    fi
-done
-if ! command -v ufw &>/dev/null; then
-    print_info "UFW not found. Installing..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
-    # Allow SSH before enabling so we don't lock ourselves out
-    ufw allow OpenSSH
-    ufw --force enable
-    print_info "UFW installed and enabled."
+# Disable UFW entirely if present — it conflicts with iptables-persistent
+# and its reject chains block Docker traffic even when "inactive"
+if command -v ufw &>/dev/null; then
+    print_info "Disabling UFW to prevent iptables rule conflicts..."
+    ufw disable 2>/dev/null || true
+    # Flush any lingering UFW reject chains
+    iptables -F ufw-reject-input   2>/dev/null || true
+    iptables -F ufw-reject-forward 2>/dev/null || true
+    iptables -F ufw-reject-output  2>/dev/null || true
 fi
 
-# Open IKE and NAT-T ports for IPsec
-ufw allow 500/udp  comment 'IPsec IKE'
-ufw allow 4500/udp comment 'IPsec NAT-T'
-
-# Persist FORWARD rules for xfrm0 via UFW's before.rules.
-# This is the correct approach when UFW is the system firewall — it avoids
-# installing iptables-persistent which conflicts with UFW on Ubuntu 24.04.
-# UFW loads before.rules at startup before its own rules, so these FORWARD
-# rules are always present regardless of Docker's FORWARD chain policy.
-UFW_BEFORE="/etc/ufw/before.rules"
-XFRM_MARKER="# Xinle xfrm0 FORWARD rules"
-if ! grep -q "$XFRM_MARKER" "$UFW_BEFORE"; then
-    # Insert after the *filter table header line
-    sed -i "/^\*filter/a \\
-${XFRM_MARKER}\\
--A FORWARD -i xfrm0 -j ACCEPT\\
--A FORWARD -o xfrm0 -j ACCEPT" "$UFW_BEFORE"
-    print_info "xfrm0 FORWARD rules added to $UFW_BEFORE (persistent via UFW)."
-else
-    print_info "xfrm0 FORWARD rules already present in $UFW_BEFORE."
+# Ensure iptables-persistent is installed for rule persistence across reboots
+if ! dpkg-query -W -f='${Status}' iptables-persistent 2>/dev/null | grep -q 'install ok installed'; then
+    print_info "Installing iptables-persistent..."
+    echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
+    echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
+    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
 fi
 
-# Apply the rules immediately (without reloading UFW which would drop connections)
+# Set FORWARD policy to ACCEPT (required for Docker + IPsec routing)
+iptables  -P FORWARD ACCEPT
+ip6tables -P FORWARD ACCEPT 2>/dev/null || true
+
+# Ensure rp_filter is disabled — strict mode (2) breaks Docker NAT on some VPS kernels
+sysctl -w net.ipv4.conf.all.rp_filter=0    >/dev/null
+sysctl -w net.ipv4.conf.eth0.rp_filter=0   >/dev/null 2>/dev/null || true
+grep -q "rp_filter" /etc/sysctl.conf || \
+    printf "\nnet.ipv4.conf.all.rp_filter=0\nnet.ipv4.conf.default.rp_filter=0\n" >> /etc/sysctl.conf
+
+# Apply xfrm0 FORWARD rules immediately
 iptables -C FORWARD -i xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -i xfrm0 -j ACCEPT
 iptables -C FORWARD -o xfrm0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -o xfrm0 -j ACCEPT
-print_info "UFW ports opened; iptables FORWARD rules applied and persisted."
+
+# Save all current rules so they survive reboots and Docker restarts
+netfilter-persistent save
+print_info "iptables rules persisted via netfilter-persistent."
 
 # --- 8. Create xfrm0 Systemd Service ---
 print_header "Creating Virtual Tunnel Interface (xfrm0)"

@@ -1,9 +1,9 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.18.0
+# Version: 13.19.0
 # Created: March 11, 2025
-# Last Modified: March 11, 2025
+# Last Modified: March 13, 2026
 #############################################################################
 #
 #  Xinle 欣乐 — Master Infrastructure Setup Script
@@ -91,7 +91,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.18.0                                       ║"
+    echo "  ║          Version: 13.19.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -506,12 +506,12 @@ dpkg-query -W -f='${Status}' docker-ce 2>/dev/null | grep -q "install ok install
         docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
     rm -rf /var/lib/docker /etc/docker || true; traces=true; }
-# Purge iptables-persistent/netfilter-persistent if present from a previous
-# failed run. These conflict with UFW (apt removes UFW to install them, or
-# vice versa) and must be cleaned up before the IPsec stage installs UFW.
-for _pkg in iptables-persistent netfilter-persistent; do
+# Purge UFW if present from a previous run — UFW's reject chains interfere
+# with Docker's iptables rules even when "inactive". We use iptables-persistent
+# instead, which is installed cleanly by the IPsec stage.
+for _pkg in ufw; do
     dpkg-query -W -f='${Status}' "$_pkg" 2>/dev/null | grep -q "install ok installed" && {
-        print_warn "Removing conflicting package '${_pkg}' from previous run..."
+        print_warn "Removing '${_pkg}' from previous run (conflicts with Docker iptables)..."
         DEBIAN_FRONTEND=noninteractive apt-get -y purge "$_pkg" 2>/dev/null || true
         traces=true; } || true
 done
