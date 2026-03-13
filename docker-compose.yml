@@ -2,7 +2,7 @@
 #  Xinle 欣乐 — Master Docker Compose File
 # =============================================================================
 #  Author:        James Barrett | Company: Xinle, LLC
-#  Version:       8.0.0
+#  Version:       8.1.0
 #  Created:       March 11, 2025
 #  Last Modified: March 11, 2025
 # =============================================================================
@@ -61,8 +61,10 @@ services:
     environment:
       - N8N_HOST=rmmx.xinle.biz
       - N8N_PORT=5678
-      - N8N_PROTOCOL=https
+      - N8N_PROTOCOL=http
+      - N8N_PATH=/n8n/
       - WEBHOOK_URL=https://rmmx.xinle.biz/n8n/
+      - N8N_EDITOR_BASE_URL=https://rmmx.xinle.biz/n8n/
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432

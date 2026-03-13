@@ -685,7 +685,22 @@ print_header "Stage 8: IPsec Site-to-Site VPN"
 chmod +x "${PROJECT_DEST}/scripts/05_setup_ipsec_vpn.sh"
 bash "${PROJECT_DEST}/scripts/05_setup_ipsec_vpn.sh"
 STATE_IPSEC_INSTALLED=true
-
+# =============================================================================
+#  STAGE 8b: UFW FIREWALL — OPEN REQUIRED PORTS
+# =============================================================================
+# The IPsec script installs UFW and opens 500/4500. Here we open all ports
+# needed for NPM and the application stack to be reachable from the internet.
+print_header "Stage 8b: Opening Firewall Ports"
+if command -v ufw &>/dev/null; then
+    ufw allow 22/tcp   comment 'SSH'
+    ufw allow 80/tcp   comment 'HTTP (NPM)'
+    ufw allow 81/tcp   comment 'NPM Admin UI'
+    ufw allow 443/tcp  comment 'HTTPS (NPM)'
+    ufw --force enable
+    print_ok "UFW rules applied: SSH(22), HTTP(80), NPM Admin(81), HTTPS(443)."
+else
+    print_warn "UFW not found — skipping port rules. Ensure ports 22/80/81/443 are open."
+fi
 # =============================================================================
 #  STAGE 9: NETLOCK RMM CONFIG SEEDING
 # =============================================================================
