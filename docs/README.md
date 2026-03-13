@@ -59,7 +59,7 @@ The entire system is designed for security and ease of access. Public traffic is
 To deploy the entire infrastructure on a fresh **Ubuntu 24.04.4 LTS** server, run the following command as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/01_master_setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/bootstrap.sh | sudo bash
 ```
 
 This command will:

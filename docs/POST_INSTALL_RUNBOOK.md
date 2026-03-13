@@ -9,7 +9,7 @@
 Run this single command on a **fresh Ubuntu 24.04.4 LTS** server as `root` or a user with `sudo` privileges. It is fully automated and idempotent — safe to re-run after a failed attempt.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/01_master_setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/bootstrap.sh | sudo bash
 ```
 
 > **Before running:** Ensure the `rmmx` DNS `A` record in Cloudflare is set to **DNS Only (Grey Cloud)** pointing to `184.105.7.78`. See [Step 1](#step-1-cloudflare-dns-configuration) below.

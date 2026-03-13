@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.14.0
+# Version: 13.15.0
 # Created: March 11, 2025
 # Last Modified: March 11, 2025
 #############################################################################
@@ -36,6 +36,24 @@
 #############################################################################
 
 set -euo pipefail
+
+# =============================================================================
+#  STDIN / TTY GUARD
+# =============================================================================
+# This script requires an interactive terminal (TTY) for password prompts.
+# If it is being piped from curl (stdin is a pipe, not a TTY), redirect the
+# user to bootstrap.sh which correctly handles the TTY hand-off.
+if [ ! -t 0 ]; then
+    echo ""
+    echo -e "\e[1;31m  [ERROR] This script must NOT be run directly via curl pipe.\e[0m"
+    echo -e "\e[1;31m          stdin is not a terminal — password prompts will fail.\e[0m"
+    echo ""
+    echo -e "\e[1;33m  Use the correct bootstrap command instead:\e[0m"
+    echo ""
+    echo -e "\e[1;36m    curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/bootstrap.sh | sudo bash\e[0m"
+    echo ""
+    exit 1
+fi
 
 # =============================================================================
 #  GLOBAL CONFIGURATION
@@ -73,7 +91,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.14.0                                       ║"
+    echo "  ║          Version: 13.15.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
