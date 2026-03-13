@@ -2,7 +2,7 @@
 #  Xinle 欣乐 — Master Docker Compose File
 # =============================================================================
 #  Author:        James Barrett | Company: Xinle, LLC
-#  Version:       8.1.0
+#  Version:       8.2.0
 #  Created:       March 11, 2025
 #  Last Modified: March 11, 2025
 # =============================================================================
@@ -53,6 +53,7 @@ services:
     image: n8nio/n8n:latest
     container_name: n8n
     restart: unless-stopped
+    user: "1000:1000"
     volumes:
       - /docker_apps/n8n:/home/node/.n8n
       - /storage:/storage:ro
@@ -105,6 +106,28 @@ services:
   #  4. NetLock RMM — Remote Monitoring & Management
   #     - Final URL: https://rmmx.xinle.biz/rmm
   # ---------------------------------------------------------------------------
+  # netlockrmm-web MUST start first — it creates the MySQL schema on first boot
+  netlockrmm-web:
+    image: nicomak101/netlock-rmm-web-console:latest
+    container_name: netlockrmm-web
+    restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
+    volumes:
+      - /docker_apps/netlockrmm/web/appsettings.json:/app/appsettings.json:ro
+      - /storage:/storage:ro
+    networks:
+      - xinle_network
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
   netlockrmm-server:
     image: nicomak101/netlock-rmm-server:latest
     container_name: netlockrmm-server
@@ -125,22 +148,8 @@ services:
     networks:
       - xinle_network
     depends_on:
-      mysql:
+      netlockrmm-web:
         condition: service_healthy
-
-  netlockrmm-web:
-    image: nicomak101/netlock-rmm-web-console:latest
-    container_name: netlockrmm-web
-    restart: unless-stopped
-    environment:
-      - TZ=America/Chicago
-    volumes:
-      - /docker_apps/netlockrmm/web/appsettings.json:/app/appsettings.json:ro
-      - /storage:/storage:ro
-    networks:
-      - xinle_network
-    depends_on:
-      - netlockrmm-server
 
   # ---------------------------------------------------------------------------
   #  5. Databases & Database Admin Tools

@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.19.0
+# Version: 13.20.0
 # Created: March 11, 2025
 # Last Modified: March 13, 2026
 #############################################################################
@@ -91,7 +91,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.19.0                                       ║"
+    echo "  ║          Version: 13.20.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -674,6 +674,8 @@ mkdir -p \
 
 chown -R "$TARGET_USER":"$TARGET_USER" "$DOCKER_APPS_DIR"
 chown -R 5050:5050 "${DOCKER_APPS_DIR}/pgadmin"
+# n8n runs as the 'node' user (UID 1000) inside the container — must own its data dir
+chown -R 1000:1000 "${DOCKER_APPS_DIR}/n8n"
 STATE_DOCKER_DIR_CREATED=true
 print_ok "Directory structure created."
 
@@ -716,8 +718,9 @@ set -a; source "${PROJECT_DEST}/.env"; set +a
     print_ok "Seeded netlockrmm-server appsettings.json"
 }
 [ ! -f "${DOCKER_APPS_DIR}/netlockrmm/web/appsettings.json" ] && {
-    cp "${PROJECT_DEST}/scripts/netlock-web-appsettings.json" \
-        "${DOCKER_APPS_DIR}/netlockrmm/web/appsettings.json"
+    sed "s|\${MYSQL_PASSWORD}|${MYSQL_PASSWORD}|g" \
+        "${PROJECT_DEST}/scripts/netlock-web-appsettings.json" \
+        > "${DOCKER_APPS_DIR}/netlockrmm/web/appsettings.json"
     print_ok "Seeded netlockrmm-web appsettings.json"
 }
 chown -R "$TARGET_USER":"$TARGET_USER" "${DOCKER_APPS_DIR}/netlockrmm"
