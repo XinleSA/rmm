@@ -1,7 +1,7 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 13.24.0
+# Version: 14.0.0
 # Created: March 11, 2025
 # Last Modified: March 15, 2026
 #############################################################################
@@ -91,7 +91,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 13.21.0                                       ║"
+    echo "  ║          Version: 14.0.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -371,6 +371,186 @@ fi
 
 # Suppress needrestart interactive prompts for the entire install
 disable_needrestart
+
+# =============================================================================
+#  STAGE 0: PRE-EXISTING INSTALLATION DETECTION
+# =============================================================================
+print_header "Stage 0: Checking for Pre-Existing Installation"
+
+FOUND_DOCKER=false
+FOUND_DOCKER_APPS=false
+FOUND_CONTAINERS=false
+FOUND_USER=false
+FOUND_IPSEC=false
+FOUND_ENV=false
+FOUND_NETFILTER=false
+
+command -v docker &>/dev/null && docker info &>/dev/null 2>&1 && FOUND_DOCKER=true
+[ -d "$DOCKER_APPS_DIR" ] && FOUND_DOCKER_APPS=true
+id -u "$TARGET_USER" >/dev/null 2>&1 && FOUND_USER=true
+systemctl is-active --quiet ipsec 2>/dev/null && FOUND_IPSEC=true
+[ -f "${PROJECT_DEST}/.env" ] && FOUND_ENV=true
+dpkg-query -W -f='${Status}' netfilter-persistent 2>/dev/null | \
+    grep -q 'install ok installed' && FOUND_NETFILTER=true
+
+if $FOUND_DOCKER; then
+    CONTAINER_COUNT=$(docker ps -aq 2>/dev/null | wc -l || echo 0)
+    [ "$CONTAINER_COUNT" -gt 0 ] && FOUND_CONTAINERS=true
+fi
+
+ANYTHING_FOUND=false
+$FOUND_DOCKER      && ANYTHING_FOUND=true
+$FOUND_DOCKER_APPS && ANYTHING_FOUND=true
+$FOUND_USER        && ANYTHING_FOUND=true
+$FOUND_IPSEC       && ANYTHING_FOUND=true
+$FOUND_ENV         && ANYTHING_FOUND=true
+
+if $ANYTHING_FOUND; then
+    echo ""
+    echo -e "\e[1;33m  ┌─────────────────────────────────────────────────────────────────┐\e[0m"
+    echo -e "\e[1;33m  │  ⚠  PRE-EXISTING XINLE INSTALLATION DETECTED                   │\e[0m"
+    echo -e "\e[1;33m  └─────────────────────────────────────────────────────────────────┘\e[0m"
+    echo ""
+    echo -e "\e[1;37m  The following components were found on this server:\e[0m"
+    echo ""
+    $FOUND_DOCKER      && printf "    \e[1;33m●\e[0m  Docker CE installed (%s)\n" \
+        "$(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',')"
+    $FOUND_CONTAINERS  && printf "    \e[1;33m●\e[0m  Docker containers present (%s found)\n" \
+        "$CONTAINER_COUNT"
+    $FOUND_DOCKER_APPS && printf "    \e[1;33m●\e[0m  %s/ directory exists\n" "$DOCKER_APPS_DIR"
+    $FOUND_USER        && printf "    \e[1;33m●\e[0m  Service user '%s' exists\n" "$TARGET_USER"
+    $FOUND_IPSEC       && printf "    \e[1;33m●\e[0m  IPsec / strongSwan is active\n"
+    $FOUND_ENV         && printf "    \e[1;33m●\e[0m  .env file present at %s/.env\n" "$PROJECT_DEST"
+    $FOUND_NETFILTER   && printf "    \e[1;33m●\e[0m  netfilter-persistent installed\n"
+    echo ""
+    echo -e "\e[1;37m  Choose how to proceed:\e[0m"
+    echo ""
+    echo "    [1]  PURGE EVERYTHING and start fresh  (removes ALL data — recommended)"
+    echo "    [2]  Continue install over existing    (may cause conflicts)"
+    echo "    [3]  Abort — exit without any changes"
+    echo ""
+    read -rp "  Enter choice [1/2/3]: " REINSTALL_CHOICE </dev/tty
+    echo ""
+
+    case "$REINSTALL_CHOICE" in
+        1)
+            print_header "PURGING EXISTING INSTALLATION"
+            echo ""
+            echo -e "\e[1;31m  THIS WILL PERMANENTLY DELETE ALL EXISTING DATA.\e[0m"
+            echo ""
+            read -rp "  Type CONFIRM to proceed with full purge: " PURGE_CONFIRM </dev/tty
+            if [ "$PURGE_CONFIRM" != "CONFIRM" ]; then
+                print_warn "Purge cancelled. Aborting."
+                trap - ERR; exit 0
+            fi
+            echo ""
+            print_info "Beginning full purge..."
+
+            # Stop and remove all Docker containers, volumes, networks, images
+            if $FOUND_DOCKER; then
+                print_info "Removing all Docker containers, volumes and images..."
+                [ -f "${PROJECT_DEST}/docker-compose.yml" ] && \
+                    (cd "$PROJECT_DEST" && docker compose down -v --remove-orphans 2>/dev/null) || true
+                docker ps -aq 2>/dev/null | xargs docker rm -f 2>/dev/null || true
+                docker volume ls -q 2>/dev/null | xargs docker volume rm -f 2>/dev/null || true
+                docker network ls --filter type=custom -q 2>/dev/null | \
+                    xargs docker network rm 2>/dev/null || true
+                docker image prune -af 2>/dev/null || true
+                print_ok "Docker containers, volumes, networks and images removed."
+            fi
+
+            # Wipe /docker_apps
+            if $FOUND_DOCKER_APPS; then
+                $FOUND_DOCKER && force_wipe_docker_data "$DOCKER_APPS_DIR" || \
+                    rm -rf "$DOCKER_APPS_DIR" || true
+                print_ok "${DOCKER_APPS_DIR} removed."
+            fi
+
+            # Remove Docker CE
+            if $FOUND_DOCKER; then
+                print_info "Removing Docker CE..."
+                apt-get --allow-remove-essential -y purge \
+                    docker-ce docker-ce-cli containerd.io \
+                    docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
+                rm -rf /var/lib/docker /etc/docker \
+                       /etc/apt/sources.list.d/docker.list \
+                       /etc/apt/keyrings/docker.asc || true
+                systemctl daemon-reload 2>/dev/null || true
+                print_ok "Docker CE removed."
+            fi
+
+            # Remove IPsec
+            if $FOUND_IPSEC || systemctl list-units --all 2>/dev/null | grep -q ipsec; then
+                print_info "Removing strongSwan IPsec..."
+                systemctl stop ipsec xfrm0-interface.service xinle-firewall.service 2>/dev/null || true
+                systemctl disable xfrm0-interface.service xinle-firewall.service 2>/dev/null || true
+                apt-get purge -y strongswan strongswan-starter 2>/dev/null || true
+                rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/ipsec.d
+                rm -f /etc/systemd/system/xfrm0-interface.service \
+                      /etc/systemd/system/xinle-firewall.service
+                ip link del xfrm0 2>/dev/null || true
+                systemctl daemon-reload 2>/dev/null || true
+                print_ok "IPsec / strongSwan removed."
+            fi
+
+            # Remove netfilter-persistent
+            if $FOUND_NETFILTER; then
+                print_info "Removing netfilter-persistent..."
+                apt-get purge -y netfilter-persistent iptables-persistent 2>/dev/null || true
+                rm -rf /etc/iptables 2>/dev/null || true
+                print_ok "netfilter-persistent removed."
+            fi
+
+            # Remove service user
+            if $FOUND_USER; then
+                print_info "Removing service user '${TARGET_USER}'..."
+                deluser --remove-home "$TARGET_USER" 2>/dev/null || true
+                print_ok "User '${TARGET_USER}' removed."
+            fi
+
+            # Remove NTP customisations
+            rm -f /etc/systemd/timesyncd.conf.d/xinle-ntp.conf 2>/dev/null || true
+            apt-get purge -y chrony 2>/dev/null || true
+
+            # Remove .env
+            $FOUND_ENV && rm -f "${PROJECT_DEST}/.env" && print_ok ".env removed."
+
+            # Reset iptables
+            print_info "Resetting iptables to clean state..."
+            iptables  -F 2>/dev/null || true; iptables  -X 2>/dev/null || true
+            iptables  -t nat    -F 2>/dev/null || true; iptables  -t nat    -X 2>/dev/null || true
+            iptables  -t mangle -F 2>/dev/null || true; iptables  -t mangle -X 2>/dev/null || true
+            iptables  -P INPUT   ACCEPT 2>/dev/null || true
+            iptables  -P FORWARD ACCEPT 2>/dev/null || true
+            iptables  -P OUTPUT  ACCEPT 2>/dev/null || true
+            ip6tables -F 2>/dev/null || true
+            ip6tables -P INPUT   ACCEPT 2>/dev/null || true
+            ip6tables -P FORWARD ACCEPT 2>/dev/null || true
+            ip6tables -P OUTPUT  ACCEPT 2>/dev/null || true
+            print_ok "iptables reset to clean ACCEPT policy."
+
+            apt-get autoremove -y --purge 2>/dev/null || true
+            apt-get clean 2>/dev/null || true
+            echo ""
+            print_ok "Full purge complete. Proceeding with fresh installation..."
+            echo ""
+            sleep 2
+            ;;
+        2)
+            print_warn "Continuing over existing installation. Conflicts may occur."
+            ;;
+        3)
+            print_info "Aborting. No changes made."
+            trap - ERR; exit 0
+            ;;
+        *)
+            print_error "Invalid choice '${REINSTALL_CHOICE}'. Aborting."
+            trap - ERR; exit 1
+            ;;
+    esac
+else
+    print_ok "Clean system — no pre-existing installation detected. Proceeding."
+fi
 
 # =============================================================================
 #  STAGE 1: COLLECT .ENV VALUES
