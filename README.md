@@ -1,79 +1,158 @@
-# Xinle 欣乐 — Self-Hosted Infrastructure
+# Xinle 欣乐 RMMX — Self-Hosted Infrastructure
 
-**Version: 8.2** | **Target OS: Ubuntu 24.04.4 LTS (Noble Numbat)**
-
-> **[🌐 View Landing Page →](https://xinlesa.github.io/rmmx/)**
-> **[📖 Full Documentation →](docs/README.md)**
+**Version 10.1.0** | **Author:** James Barrett | **Company:** Xinle, LLC
+**Target OS:** Ubuntu 24.04 LTS | **Last Modified:** March 2026
 
 ---
 
-## Quick Start (Fresh Server)
-
-SSH into your VPS as `root` and run this single command:
+## One-Line Deployment
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/01_master_setup.sh | sudo bash
-```
-
-This will clone this repository, create the `sar` system user, install all dependencies (Docker, IPsec, Grafana Alloy, CIFS/NFS), and start all services automatically.
-
----
-
-## Services
-
-| Service | URL | Description |
-| :--- | :--- | :--- |
-| Landing Page | `https://rmmx.xinle.biz/home` | Central hub for all services |
-| NetLock RMM | `https://rmmx.xinle.biz/rmm` | Remote monitoring & management |
-| Nginx Proxy Manager | `https://rmmx.xinle.biz/npm` | Reverse proxy & SSL |
-| n8n | `https://rmmx.xinle.biz/n8n` | Workflow automation |
-| Forgejo | `https://rmmx.xinle.biz/git` | Self-hosted Git |
-| pgAdmin 4 | `https://rmmx.xinle.biz/pgdba` | PostgreSQL admin |
-| phpMyAdmin | `https://rmmx.xinle.biz/dba` | MySQL admin (NetLock RMM) |
-
----
-
-## Scripts
-
-| Script | Version | Description |
-| :--- | :--- | :--- |
-| `scripts/01_master_setup.sh` | 8.0 | **Start here** — deploys the full stack |
-| `scripts/02_update_images.sh` | 8.2 | Update Docker images, Alloy, and optionally schedule daily cron |
-| `scripts/03_migrate_github_to_forgejo.sh` | 6.0 | Migrate all GitHub repos to Forgejo |
-| `scripts/04_reinstall_os.sh` | 6.0 | Factory reset the VPS to Ubuntu 24.04.4 via SSH |
-| `scripts/05_setup_ipsec_vpn.sh` | 6.0 | Configure IPsec site-to-site VPN to UDM Pro |
-
-### Update Script Usage
-
-```bash
-sudo ./scripts/02_update_images.sh --help        # Show all options
-sudo ./scripts/02_update_images.sh               # Interactive (prompts each step)
-sudo ./scripts/02_update_images.sh -y            # Unattended (auto-yes all steps)
-sudo ./scripts/02_update_images.sh --install-cron  # Schedule daily 2:00 AM auto-update
+curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/bootstrap.sh | sudo bash
 ```
 
 ---
 
-## Monitoring
+## What You Get
 
-**Grafana Alloy** is installed as a host service and pushes metrics to `https://fenix.xinle.biz/grafana`.
-Import the dashboards from `monitoring/` into Grafana:
+| Service | URL | Notes |
+|---------|-----|-------|
+| **Landing Dashboard** | `https://rmmx.xinle.biz` | Central hub with links to all services |
+| **NetLock RMM** | `https://rmm.xinle.biz` | Remote monitoring & management |
+| **n8n** | `https://rmmx.xinle.biz/n8n/` | Workflow automation |
+| **Forgejo** | `https://rmmx.xinle.biz/git/` | Self-hosted Git |
+| **Nginx Proxy Manager** | `http://<vps>:81` | Reverse proxy & SSL |
+| **pgAdmin** | `https://rmmx.xinle.biz/pgadmin/` | PostgreSQL admin |
+| **phpMyAdmin** | `https://rmmx.xinle.biz/pma/` | MySQL admin |
+| **Grafana Alloy** | `http://<vps>:12345` | Metrics agent |
 
-- `node-exporter-full-dashboard.json` — Host CPU, memory, disk, network (ID: 1860)
-- `cadvisor-dashboard.json` — Docker container metrics (ID: 13946)
+---
+
+## Network Architecture
+
+```
+Internet
+    │
+    ▼
+Cloudflare DNS (rmmx.xinle.biz + rmm.xinle.biz → 184.105.7.78)
+    │
+    ▼
+VPS 184.105.7.78
+    ├── :80/:443  → Nginx Proxy Manager → rmmx.xinle.biz subfolders
+    ├── :81       → NPM Admin UI
+    ├── :7080     → NetLock RMM Agent Backend (direct — not through NPM)
+    ├── :7081     → NetLock RMM Relay Server
+    ├── :12345    → Grafana Alloy UI
+    └── :500/:4500 → IPsec IKEv2 VPN
+                         │
+                    Encrypted tunnel
+                         │
+                    UDM Pro (10.1.0.1)
+                         │
+                    Home LAN 10.1.0.0/24
+                    (Proxmox, SAR server, AI stack)
+
+Docker Network: xinle_network (172.20.0.0/16)
+```
+
+---
+
+## Required Firewall Ports (ServerOptima Portal)
+
+| Port | Protocol | Service |
+|------|----------|---------|
+| 80 | TCP | HTTP |
+| 81 | TCP | NPM Admin |
+| 443 | TCP | HTTPS |
+| **7080** | **TCP** | **NetLock Agent Backend** |
+| **7081** | **TCP** | **NetLock Relay** |
+| 12345 | TCP | Alloy UI |
+| 500 | UDP | IPsec IKE |
+| 4500 | UDP | IPsec NAT-T |
+
+---
+
+## Post-Deployment Steps
+
+- **[ ]** Cloudflare DNS — add `rmmx` and `rmm` A records → `184.105.7.78` (DNS Only)
+- **[ ]** ServerOptima firewall — open ports 7080, 7081, 443, 80, 81, 12345, 500/udp, 4500/udp
+- **[ ]** NPM — request SSL certs for `rmmx.xinle.biz` and `rmm.xinle.biz`
+- **[ ]** NPM — attach SSL certs to proxy hosts, enable Force SSL
+- **[ ]** Switch Cloudflare to Proxied (Orange) after SSL verified
+- **[ ]** UDM Pro — configure IPsec VPN with PSK from `sudo cat /etc/ipsec.d/psk.txt`
+- **[ ]** NetLock RMM — complete setup, enter Members Portal API key
+- **[ ]** NetLock RMM — download and install agents on endpoints
+- **[ ]** n8n, Forgejo — complete first-run wizard
+
+Full guide: **[`docs/POST_INSTALL_RUNBOOK.md`](docs/POST_INSTALL_RUNBOOK.md)**
+
+---
+
+## Container Stack
+
+```
+xinle_network (172.20.0.0/16)
+│
+├── INGRESS
+│   └── npm (jc21/nginx-proxy-manager) :80/:443/:81
+│
+├── DASHBOARD
+│   └── landing (nginx:alpine) — serves ./dash/
+│
+├── APPLICATIONS
+│   ├── n8n (n8nio/n8n) :5678
+│   ├── forgejo (forgejo/forgejo:14) :3000
+│   ├── netlockrmm-web (nicomak101/netlock-rmm-web-console) :5000
+│   └── netlockrmm-server (nicomak101/netlock-rmm-server) :7080/:7081
+│
+├── DATABASES
+│   ├── postgres:16 :5432
+│   ├── pgadmin (dpage/pgadmin4) :80
+│   ├── mysql:8.0 :3306
+│   └── phpmyadmin :80
+│
+└── MONITORING
+    └── alloy (grafana/alloy) :12345
+```
 
 ---
 
 ## Repository Structure
 
-| Path | Description |
-| :--- | :--- |
-| `docker-compose.yml` | All Docker service definitions |
-| `monitoring/` | Grafana Alloy config and dashboard JSON files |
-| `landing/index.html` | Landing page served at `/home` |
-| `docs/` | Full documentation (all guides) |
-| `npm_configs/` | Nginx Proxy Manager config snippets |
+```
+rmmx/
+├── scripts/
+│   ├── bootstrap.sh                    # Entry point — curl this (v1.3.0)
+│   ├── 01_master_setup.sh              # Main installer (v14.2.0)
+│   ├── 02_update_images.sh             # Update Docker images
+│   ├── 04_reinstall_os.sh              # Full OS reinstall (v7.3.0)
+│   ├── 05_setup_ipsec_vpn.sh           # IPsec VPN (v8.1.0)
+│   ├── netlock-web-appsettings.json    # NetLock web console config
+│   ├── netlock-server-appsettings.json # NetLock server config
+│   └── postgres-init/                  # DB init SQL
+├── dash/
+│   └── index.html                      # Landing dashboard
+├── docker-compose.yml                  # Full stack (v9.1.0)
+├── monitoring/
+│   └── alloy-config.alloy              # Grafana Alloy config
+├── npm_configs/                        # NPM proxy config reference
+├── docs/
+│   ├── POST_INSTALL_RUNBOOK.md         # ← Start here after install
+│   ├── 04_vps_reset_guide.md
+│   ├── 05_cloudflare_dns_guide.md
+│   ├── 06_site_to_site_vpn_guide.md
+│   └── 07_ipsec_vpn_next_steps.md
+└── error_logs/                         # Auto-pushed install logs
+```
 
 ---
 
-*Infrastructure managed by [Xinle 欣乐](https://xinle.biz)*
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [`docs/POST_INSTALL_RUNBOOK.md`](docs/POST_INSTALL_RUNBOOK.md) | Complete post-install checklist with credentials |
+| [`docs/05_cloudflare_dns_guide.md`](docs/05_cloudflare_dns_guide.md) | DNS setup |
+| [`docs/06_site_to_site_vpn_guide.md`](docs/06_site_to_site_vpn_guide.md) | IPsec VPN guide |
+| [`docs/07_ipsec_vpn_next_steps.md`](docs/07_ipsec_vpn_next_steps.md) | VPN verification |
+| [`docs/04_vps_reset_guide.md`](docs/04_vps_reset_guide.md) | VPS reset / OS reinstall |

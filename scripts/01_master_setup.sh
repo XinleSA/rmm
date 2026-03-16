@@ -1,9 +1,9 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 14.1.0
+# Version: 14.2.0
 # Created: March 11, 2025
-# Last Modified: March 15, 2026
+# Last Modified: March 16, 2026
 #############################################################################
 #
 #  Xinle 欣乐 — Master Infrastructure Setup Script
@@ -91,7 +91,7 @@ print_banner() {
     echo "  ╔══════════════════════════════════════════════════════════════════╗"
     echo "  ║          Xinle 欣乐 — Infrastructure Deployment                 ║"
     echo "  ║          Author: James Barrett | Xinle, LLC                     ║"
-    echo "  ║          Version: 14.1.0                                       ║"
+    echo "  ║          Version: 14.2.0                                       ║"
     echo "  ╚══════════════════════════════════════════════════════════════════╝"
     echo -e "\e[0m"
 }
@@ -1332,7 +1332,11 @@ echo "  │  STEP 2 — Nginx Proxy Manager                                     
 echo "  │  URL:   http://${VPS_IP}:81                                         │"
 echo "  │  Login: admin@example.com / changeme                                │"
 echo "  ├─────────────────────────────────────────────────────────────────────┤"
-echo "  │  STEP 3 — UDM Pro IPsec VPN                                         │"
+echo "  │  STEP 3 — NetLock RMM Agent Port                                     │"
+echo "  │  Agents connect to: rmm.xinle.biz:7080                              │"
+echo "  │  Add firewall rule: ServerOptima portal → TCP 7080                  │"
+echo "  ├─────────────────────────────────────────────────────────────────────┤"
+echo "  │  STEP 4 — UDM Pro IPsec VPN                                         │"
 echo "  │  PSK     : ${VPN_PSK}                                               │"
 echo "  │  VPS IP  : ${VPS_IP}                                                │"
 echo "  │  Remote  : 172.20.0.0/16  |  Local: 10.1.0.0/24                    │"

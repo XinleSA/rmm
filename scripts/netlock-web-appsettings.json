@@ -1,64 +1,76 @@
 {
-  "Logging": {
-    "LogLevel": {
-      "Default": "Warning",
-      "Microsoft": "Error",
-      "Microsoft.Hosting.Lifetime": "Warning"
-    },
-    "Custom": {
-      "Enabled": false
-    }
-  },
-  "AllowedHosts": "*",
-  "Kestrel": {
-    "Endpoint": {
-      "Http": {
-        "Enabled": true,
-        "Port": 5000
-      },
-      "Https": {
-        "Enabled": false,
-        "Port": 5001,
-        "Force": false,
-        "Hsts": {
-          "Enabled": false
+    "Logging": {
+        "LogLevel": {
+            "Default": "Warning",
+            "Microsoft": "Error",
+            "Microsoft.Hosting.Lifetime": "Warning"
         },
-        "Certificate": {
-          "Path": "",
-          "Password": ""
+        "Custom": {
+            "Enabled": false
         }
-      }
     },
-    "KnownProxies": []
-  },
-  "NetLock_Remote_Server": {
-    "Server": "netlockrmm-server",
-    "Port": 7080,
-    "UseSSL": false
-  },
-  "NetLock_File_Server": {
-    "Server": "netlockrmm-server",
-    "Port": 7080,
-    "UseSSL": false
-  },
-  "MySQL": {
-    "Server": "mysql",
-    "Port": 3306,
-    "Database": "netlockrmm",
-    "User": "sar",
-    "Password": "${MYSQL_PASSWORD}",
-    "SslMode": "None",
-    "AdditionalConnectionParameters": "AllowPublicKeyRetrieval=True;"
-  },
-  "Webinterface": {
-    "Language": "en-US",
-    "Membership_Reminder": false,
-    "PublicOverrideUrl": "https://rmm.xinle.biz"
-  },
-  "Members_Portal_Api": {
-    "Enabled": true,
-    "Cloud": true,
-    "ApiKeyOverride": "",
-    "ServerGuid": ""
-  }
+    "AllowedHosts": "*",
+    "Kestrel": {
+        "Endpoint": {
+            "Http": {
+                "Enabled": true,
+                "Port": 5000
+            },
+            "Https": {
+                "Enabled": false,
+                "Port": 5001,
+                "Force": false,
+                "Hsts": {
+                    "Enabled": false
+                },
+                "Certificate": {
+                    "Path": "",
+                    "Password": ""
+                }
+            }
+        },
+        "KnownProxies": []
+    },
+    "NetLock_Remote_Server": {
+        "Server": "netlockrmm-server",
+        "Port": 7080,
+        "UseSSL": false
+    },
+    "NetLock_File_Server": {
+        "Server": "netlockrmm-server",
+        "Port": 7080,
+        "UseSSL": false
+    },
+    "MySQL": {
+        "Server": "mysql",
+        "Port": 3306,
+        "Database": "netlockrmm",
+        "User": "sar",
+        "Password": "${MYSQL_PASSWORD}",
+        "SslMode": "None",
+        "AdditionalConnectionParameters": "AllowPublicKeyRetrieval=True;"
+    },
+    "Webinterface": {
+        "Language": "en-US",
+        "Membership_Reminder": false,
+        "PublicOverrideUrl": "https://rmm.xinle.biz",
+        "Title": "Xinle \u6b23\u4e50 RMM",
+        "Accept_License": true,
+        "Default_Package_Configuration": {
+            "ssl": true,
+            "communication_servers": "rmm.xinle.biz:7080",
+            "remote_servers": "rmm.xinle.biz:7080",
+            "update_servers": "rmm.xinle.biz:7080",
+            "trust_servers": "rmm.xinle.biz:7080",
+            "file_servers": "rmm.xinle.biz:7080",
+            "relay_servers": "rmm.xinle.biz:7081",
+            "language": "en-US"
+        }
+    },
+    "Members_Portal_Api": {
+        "Enabled": true,
+        "Cloud": true,
+        "ApiKeyOverride": "",
+        "ServerGuid": ""
+    }
 }

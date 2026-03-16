@@ -2,7 +2,7 @@
 #  Xinle 欣乐 — Master Docker Compose File
 # =============================================================================
 #  Author:        James Barrett | Company: Xinle, LLC
-#  Version:       9.0.0
+#  Version:       9.1.0
 #  Created:       March 11, 2025
 #  Last Modified: March 13, 2026
 # =============================================================================
@@ -136,6 +136,9 @@ services:
     image: nicomak101/netlock-rmm-server:latest
     container_name: netlockrmm-server
     restart: unless-stopped
+    ports:
+      - '7080:7080'   # Agent backend — comm, trust, update, file, relay
+      - '7081:7081'   # Relay server
     environment:
       - TZ=America/Chicago
       - NETLOCK_MYSQL_SERVER=mysql

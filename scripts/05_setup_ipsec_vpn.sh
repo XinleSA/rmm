@@ -1,9 +1,9 @@
 #!/bin/bash
 #############################################################################
 # Author: James Barrett | Company: Xinle, LLC
-# Version: 8.0.0
+# Version: 8.1.0
 # Created: March 11, 2025
-# Last Modified: March 13, 2026
+# Last Modified: March 16, 2026
 #############################################################################
 #
 #  Xinle 欣乐 — IPsec Site-to-Site VPN Setup Script
@@ -155,6 +155,10 @@ iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -A INPUT -
 iptables -C INPUT -p tcp --dport 81 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 81 -j ACCEPT
 # HTTPS (NPM)
 iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+# NetLock RMM Agent Backend
+iptables -C INPUT -p tcp --dport 7080 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 7080 -j ACCEPT
+# Grafana Alloy UI
+iptables -C INPUT -p tcp --dport 12345 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 12345 -j ACCEPT
 # IPsec IKE
 iptables -C INPUT -p udp --dport 500 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 500 -j ACCEPT
 # IPsec NAT-T
@@ -198,6 +202,10 @@ ExecStart=/bin/sh -c 'iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null 
 ExecStart=/bin/sh -c 'iptables -C INPUT -p tcp --dport 81 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 81 -j ACCEPT'
 # INPUT: HTTPS
 ExecStart=/bin/sh -c 'iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 443 -j ACCEPT'
+# INPUT: NetLock RMM Agent Backend
+ExecStart=/bin/sh -c 'iptables -C INPUT -p tcp --dport 7080 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 7080 -j ACCEPT'
+# INPUT: Grafana Alloy UI
+ExecStart=/bin/sh -c 'iptables -C INPUT -p tcp --dport 12345 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 12345 -j ACCEPT'
 # INPUT: IPsec IKE
 ExecStart=/bin/sh -c 'iptables -C INPUT -p udp --dport 500 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 500 -j ACCEPT'
 # INPUT: IPsec NAT-T
