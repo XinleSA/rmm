@@ -1,248 +1,76 @@
-# Xinle RMMX — Post-Install Runbook & Credentials
+# Xinle RMMX — Post-Installation Runbook
 
-**Version 5.0.0** | **Author:** James Barrett | **Company:** Xinle, LLC | **Last Modified:** March 2026
+This document outlines the required steps to complete the Xinle RMMX stack configuration after the main installer has finished.
+
+**Dashboard:** [https://rmmx.xinle.biz/dash/](https://rmmx.xinle.biz/dash/)
+**Credentials:** [CREDENTIALS.md](./CREDENTIALS.md)
 
 ---
 
-## Quick Reference: Deploy Command
+## Step 1: First-Time Logins & Setup
+
+Before configuring the network, log in to each primary service to complete its first-run setup process. This typically involves creating an administrative user and setting a password.
+
+1.  **NetLock RMM:** [https://rmmx.xinle.biz/](https://rmmx.xinle.biz/)
+2.  **n8n:** [https://rmmx.xinle.biz/n8n/](https://rmmx.xinle.biz/n8n/)
+3.  **Forgejo:** [https://rmmx.xinle.biz/git/](https://rmmx.xinle.biz/git/)
+
+Refer to the [CREDENTIALS.md](./CREDENTIALS.md) document for the initial default passwords for pgAdmin, phpMyAdmin, and the Nginx Proxy Manager admin UI.
+
+---
+
+## Step 2: IPsec Site-to-Site VPN Configuration
+
+To enable direct, secure communication between your local network and the services running on the VPS, you must configure a site-to-site IPsec VPN tunnel.
+
+### A. UDM Pro / EdgeRouter Configuration
+
+Use the following parameters to create a new **Site-to-Site VPN** on your UniFi or EdgeMax device.
+
+| Parameter | Value |
+|---|---|
+| **VPN Type** | IPsec Site-to-Site |
+| **Remote Subnets** | `172.20.0.0/16` |
+| **Peer IP / Endpoint** | `184.105.7.78` |
+| **Local WAN IP** | *(Your router's public IP)* |
+| **IKE Version** | `IKEv2` |
+| **Pre-Shared Key (PSK)** | `ffa233dee472e12a421f5cc64027687a` |
+| **Key Exchange Version** | `IKEv2` |
+| **Encryption** | `AES-256` |
+| **Hashing** | `SHA256` |
+| **DH Group** | `14` |
+| **Perfect Forward Secrecy** | Enabled |
+
+### B. Device Communication Across the Tunnel
+
+Once the tunnel is **up and active**, devices on your local network (e.g., `10.1.0.0/24`) can communicate directly with the Docker containers on the VPS as if they were on the same network.
+
+-   **Accessing Services:** You can connect to services using their container hostname and port. For example, you can connect a database client like DBeaver directly to `postgres:5432` or `mysql:3306` from your laptop.
+-   **DNS Resolution:** The Docker DNS server will resolve container hostnames (`postgres`, `n8n`, `forgejo`, etc.) for any device connected through the VPN.
+-   **Firewall:** The IPsec tunnel bypasses the public firewall rules. All traffic between the trusted subnets is allowed.
+
+### C. Client-to-Site VPN (Road Warrior)
+
+For individual devices (laptops, phones) to connect from anywhere, you can create EAP-MSCHAPv2 users. SSH into the server (`184.105.7.78`) and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/bootstrap.sh | sudo bash
+# Replace vpnuser and YourPassword with your desired credentials
+echo 'vpnuser : EAP "YourPassword"' | sudo tee -a /etc/ipsec.d/passwd
+
+# Reload the IPsec configuration to apply the new user
+sudo ipsec reload
 ```
 
-> **v14.2.0:** Automatically detects pre-existing installs and offers full purge + fresh start.
+Configure your device's native VPN client with the server IP, your new username/password, and the same PSK.
 
 ---
 
-## Architecture Overview
+## Step 3: Cloudflare DNS & SSL
 
-```
-Internet → Cloudflare DNS → VPS (184.105.7.78)
-                              ├── :80/:443 → Nginx Proxy Manager → All web services
-                              ├── :81      → NPM Admin UI
-                              ├── :7080    → NetLock RMM Agent Backend (direct)
-                              ├── :7081    → NetLock RMM Relay Server (direct)
-                              ├── :12345   → Grafana Alloy UI
-                              └── :500/:4500 → IPsec VPN
-                                    ↕
-                              UDM Pro → Home LAN (10.1.0.0/24)
-```
+After verifying all services are working correctly, you can enable Cloudflare's proxy (orange cloud) for the `rmmx.xinle.biz` DNS record. This will provide DDoS protection, caching, and a global CDN for your services.
 
-**Key design:** NetLock RMM agents connect **directly** to port 7080 (not through NPM). The web console at `https://rmm.xinle.biz` goes through NPM on 443. All other services go through NPM subfolder routing.
-
----
-
-## Default Credentials
-
-> ⚠ **Change all defaults immediately after first login.**
-
-| Service | URL | Username | Password |
-|---------|-----|----------|----------|
-| **Nginx Proxy Manager** | `http://184.105.7.78:81` | `admin@example.com` | `changeme` |
-| **NetLock RMM** | `https://rmm.xinle.biz` | `admin` | Set via MySQL (see below) |
-| **n8n** | `https://rmmx.xinle.biz/n8n/` | First-run wizard | — |
-| **Forgejo** | `https://rmmx.xinle.biz/git/` | First-run wizard | — |
-| **pgAdmin** | `https://rmmx.xinle.biz/pgadmin/` | `admin@xinle.biz` | *(PGADMIN_PASSWORD from .env)* |
-| **phpMyAdmin** | `https://rmmx.xinle.biz/pma/` | `sar` | *(MYSQL_PASSWORD from .env)* |
-| **Grafana Alloy** | `http://184.105.7.78:12345` | No auth | — |
-
----
-
-## Service URLs
-
-| Service | Public URL | Internal | Port |
-|---------|-----------|----------|------|
-| Landing Dashboard | `https://rmmx.xinle.biz` | `landing:80` | via NPM |
-| NPM Admin | `http://184.105.7.78:81` | `npm:81` | 81 |
-| **NetLock RMM Web** | `https://rmm.xinle.biz` | `netlockrmm-web:5000` | via NPM |
-| **NetLock Agent Backend** | `rmm.xinle.biz:7080` | `netlockrmm-server:7080` | **7080 direct** |
-| n8n | `https://rmmx.xinle.biz/n8n/` | `n8n:5678` | via NPM |
-| Forgejo | `https://rmmx.xinle.biz/git/` | `forgejo:3000` | via NPM |
-| pgAdmin | `https://rmmx.xinle.biz/pgadmin/` | `pgadmin:80` | via NPM |
-| phpMyAdmin | `https://rmmx.xinle.biz/pma/` | `phpmyadmin:80` | via NPM |
-| Grafana Alloy | `http://184.105.7.78:12345` | `alloy:12345` | 12345 direct |
-
----
-
-## ✅ Post-Deployment Checklist
-
-### Step 1 — Cloudflare DNS
-
-Log in to [Cloudflare Dashboard](https://dash.cloudflare.com/) → `xinle.biz` → DNS → Records
-
-| Type | Name | Content | Proxy |
-|------|------|---------|-------|
-| A | `rmmx` | `184.105.7.78` | **DNS Only (Grey)** |
-| A | `rmm` | `184.105.7.78` | **DNS Only (Grey)** |
-| A | `@` | `184.105.7.78` | Proxied (Orange) |
-| CNAME | `www` | `rmmx.xinle.biz` | Proxied (Orange) |
-
-> **Both `rmmx` and `rmm` must be DNS Only** until SSL certs are issued.
-
----
-
-### Step 2 — ServerOptima Firewall
-
-Log into [ServerOptima Portal](https://useast-cloud.serveroptima.com/) → **rmmx** → **Network → Firewall → Add new rule**
-
-| Protocol | Port | Purpose |
-|----------|------|---------|
-| TCP | 80 | HTTP / NPM |
-| TCP | 81 | NPM Admin |
-| TCP | 443 | HTTPS |
-| TCP | **7080** | **NetLock RMM Agent Backend** |
-| TCP | **7081** | **NetLock RMM Relay Server** |
-| TCP | 12345 | Grafana Alloy UI |
-| UDP | 500 | IPsec IKEv2 |
-| UDP | 4500 | IPsec NAT-T |
-
----
-
-### Step 3 — Verify All Containers Are Running
-
-```bash
-cd /home/ubuntu/xinle-infra
-docker compose ps
-```
-
----
-
-### Step 4 — Nginx Proxy Manager Setup
-
-1. Open: `http://184.105.7.78:81` → Log in → Change default credentials
-2. **SSL Certificates → Add → Let's Encrypt:**
-   - Request cert for `rmmx.xinle.biz`
-   - Request cert for `rmm.xinle.biz`
-3. **Hosts → Proxy Hosts** — two hosts should exist (auto-created by install):
-   - `rmmx.xinle.biz` → `landing:80` (with all subpaths in advanced config)
-   - `rmm.xinle.biz` → `netlockrmm-web:5000`
-4. Edit each host → SSL tab → attach respective cert → Force SSL → Save
-5. Switch Cloudflare `rmmx` and `rmm` to Proxied (Orange) after SSL verified
-
-**NPM Subfolder Routing for `rmmx.xinle.biz`:**
-
-| Path | Container | Port |
-|------|-----------|------|
-| `/` | redirect → `/dash/index.html` | — |
-| `/dash/` | `landing` | 80 |
-| `/n8n/` | `n8n` | 5678 |
-| `/git/` | `forgejo` | 3000 |
-| `/pgadmin/` | `pgadmin` | 80 |
-| `/pma/` | `phpmyadmin` | 80 |
-
----
-
-### Step 5 — IPsec VPN — UDM Pro
-
-```bash
-sudo cat /etc/ipsec.d/psk.txt   # Get PSK
-```
-
-In [UniFi Network Controller](https://ai.xinle.biz/) → Settings → VPN → Site-to-Site:
-
-| Field | Value |
-|-------|-------|
-| Pre-Shared Key | *(from psk.txt)* |
-| Remote Host | `184.105.7.78` |
-| Remote Network | `172.20.0.0/16` |
-| Local Network | `10.1.0.0/24` |
-| IKE | IKEv2, AES-256, SHA-256, DH Group 14 |
-
-Verify: `sudo ipsec status` → should show `ESTABLISHED`
-
----
-
-### Step 6 — NetLock RMM First Login
-
-The install script creates a default admin account. If login fails, reset via MySQL:
-
-```bash
-MYSQL_PASS=$(sudo grep MYSQL_ROOT_PASSWORD /home/ubuntu/xinle-infra/.env | cut -d= -f2)
-HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'YourPassword', bcrypt.gensalt(11)).decode())")
-sudo docker exec mysql mysql -u root -p"${MYSQL_PASS}" netlockrmm \
-  -e "UPDATE accounts SET password='${HASH}', reset_password=0 WHERE username='admin';" 2>/dev/null
-```
-
-Login at `https://rmm.xinle.biz` → username: `admin`
-
-**After login:**
-1. Go to **Settings → Members Portal** → enter your API key
-2. Go to **Settings → System** → verify Public Override URL is `https://rmm.xinle.biz`
-3. **Download Installer** — all server fields should show `rmm.xinle.biz:7080`
-4. Run installer on endpoints → devices appear under **Unauthorized Devices** → Authorize
-
----
-
-### Step 7 — Application First-Run
-
-**n8n** — `https://rmmx.xinle.biz/n8n/`
-- Create owner account
-- Verify webhook URL: `https://rmmx.xinle.biz/n8n/`
-
-**Forgejo** — `https://rmmx.xinle.biz/git/`
-- Set Application URL: `https://rmmx.xinle.biz/git`
-- Create admin account → Install Forgejo
-
-**pgAdmin** — `https://rmmx.xinle.biz/pgadmin/`
-- Add server: host `postgres`, port `5432`, credentials from `.env`
-
----
-
-### Step 8 — Verification Checklist
-
-| Check | Command / URL | Expected |
-|-------|--------------|---------|
-| All containers | `docker compose ps` | All `Up` |
-| Landing page | `https://rmmx.xinle.biz` | Dashboard loads |
-| NetLock web | `https://rmm.xinle.biz` | Login page |
-| NetLock agent port | `nc -zv 184.105.7.78 7080` | Connection OK |
-| n8n | `https://rmmx.xinle.biz/n8n/` | Login/setup |
-| Forgejo | `https://rmmx.xinle.biz/git/` | Git homepage |
-| IPsec tunnel | `sudo ipsec status` | `ESTABLISHED` |
-| Ping home LAN | `ping -c 3 10.1.0.1` | 0% loss |
-
----
-
-## Useful Commands
-
-```bash
-# Container management
-cd /home/ubuntu/xinle-infra
-docker compose ps
-docker compose logs -f <service>
-docker compose restart <service>
-docker compose pull && docker compose up -d
-
-# Re-run installer
-curl -fsSL https://raw.githubusercontent.com/XinleSA/rmmx/main/scripts/bootstrap.sh | sudo bash
-
-# NetLock RMM
-sudo docker logs --tail 30 netlockrmm-server
-sudo docker logs --tail 30 netlockrmm-web
-MYSQL_PASS=$(sudo grep MYSQL_ROOT_PASSWORD /home/ubuntu/xinle-infra/.env | cut -d= -f2)
-sudo docker exec mysql mysql -u root -p"${MYSQL_PASS}" netlockrmm -e "SELECT public_override_url FROM settings;" 2>/dev/null
-
-# IPsec VPN
-sudo ipsec status
-sudo ipsec restart
-sudo cat /etc/ipsec.d/psk.txt
-
-# Firewall
-sudo iptables -L INPUT -n -v | grep -E "22|80|81|443|7080|7081|12345|500|4500"
-sudo systemctl status xinle-firewall.service
-```
-
----
-
-## Key File Locations
-
-| File | Path |
-|------|------|
-| Docker Compose | `/home/ubuntu/xinle-infra/docker-compose.yml` |
-| Environment vars | `/home/ubuntu/xinle-infra/.env` |
-| Container data | `/docker_apps/` |
-| NetLock web config | `/docker_apps/netlockrmm/web/appsettings.json` |
-| NetLock server config | `/docker_apps/netlockrmm/server/appsettings.json` |
-| IPsec PSK | `/etc/ipsec.d/psk.txt` |
-| Firewall service | `/etc/systemd/system/xinle-firewall.service` |
-| Install logs | `/tmp/xinle-install-*.log` + `error_logs/` in repo |
+1.  **Log in to Cloudflare.**
+2.  Navigate to the DNS settings for `xinle.biz`.
+3.  Find the `A` record for `rmmx`.
+4.  Click the **Proxy status** toggle from **DNS only** to **Proxied**.
+5.  In the NPM UI for the `rmmx.xinle.biz` proxy host, go to the **SSL** tab and change the SSL Certificate from the Let's Encrypt cert to **"Cloudflare Origin Certificate"** if you have one configured, or ensure your Cloudflare SSL/TLS encryption mode is set to **Full (Strict)**.
